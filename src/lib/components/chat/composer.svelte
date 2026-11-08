@@ -4,13 +4,15 @@
 	let {
 		value = $bindable(''),
 		generating = false,
+		sendDisabled = false,
 		onsend,
 		onstop
 	}: {
 		value?: string;
 		generating?: boolean;
-		onsend: () => void;
-		onstop: () => void;
+		sendDisabled?: boolean;
+		onsend?: () => void;
+		onstop?: () => void;
 	} = $props();
 	let input: HTMLTextAreaElement;
 	function resize() {
@@ -34,7 +36,7 @@
 		class="composer"
 		onsubmit={(event) => {
 			event.preventDefault();
-			if (value.trim() && !generating) onsend();
+			if (value.trim() && !generating && !sendDisabled) onsend?.();
 		}}
 	>
 		<textarea
@@ -52,14 +54,14 @@
 					window.matchMedia('(pointer: fine)').matches
 				) {
 					event.preventDefault();
-					if (value.trim() && !generating) onsend();
+					if (value.trim() && !generating && !sendDisabled) onsend?.();
 				}
 			}}></textarea>
 		{#if generating}
 			<button
 				type="button"
 				class="send-button"
-				onclick={onstop}
+				onclick={() => onstop?.()}
 				aria-label="Stop generating"
 				title="Stop generating"><Square size={13} fill="currentColor" /></button
 			>
@@ -67,9 +69,10 @@
 			<button
 				type="submit"
 				class="send-button"
-				disabled={!value.trim()}
+				disabled={sendDisabled || !value.trim()}
 				aria-label="Send message"
-				title="Send message"><ArrowUp size={19} strokeWidth={2} /></button
+				title={sendDisabled ? 'Chat streaming is coming next.' : 'Send message'}
+				><ArrowUp size={19} strokeWidth={2} /></button
 			>
 		{/if}
 	</form>

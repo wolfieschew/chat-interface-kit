@@ -24,8 +24,22 @@
 	import ProviderSettings from '#lib/components/chat/provider-settings.svelte';
 	import Modal from '#lib/components/ui/modal.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
-	import { createPreviewReply, suggestions } from '#lib/demo.js';
-	import type { Conversation } from '#lib/types.js';
+	import { suggestions } from '#lib/prompts.js';
+	import {
+		connectProvider,
+		disconnectProvider,
+		emptyProvider,
+		getProviderModels,
+		getProviderStatus,
+		ProviderRequestError,
+		type ConnectProviderInput
+	} from '#lib/provider-client.js';
+	import type {
+		Conversation,
+		ProviderConnection,
+		ProviderModel,
+		ProviderStatus
+	} from '#lib/types.js';
 
 	let conversations = $state<Conversation[]>([]);
 	let activeId = $state<string | null>(null);
@@ -35,10 +49,15 @@
 	let settingsTab = $state('preferences');
 	let searchOpen = $state(false);
 	let searchQuery = $state('');
-	let selectedModel = $state('balanced');
+	let selectedModel = $state('');
+	let provider = $state<ProviderStatus>({ ...emptyProvider });
+	let models = $state<ProviderModel[]>([]);
+	let providerLoading = $state(true);
+	let providerError = $state('');
+	let providerOperation = 0;
+	let providerAbort: AbortController | undefined;
 	let systemPrompt = $state('');
 	let draft = $state('');
-	let generating = $state(false);
 	let toast = $state('');
 	let renameId = $state<string | null>(null);
 	let renameOpen = $state(false);
@@ -51,10 +70,7 @@
 	let viewport: HTMLDivElement;
 	let composer: Composer;
 	let stickToBottom = $state(true);
-	let generationTimer: ReturnType<typeof setInterval> | undefined;
 	let toastTimer: ReturnType<typeof setTimeout>;
-	let streamingConversationId: string | null = null;
-	let streamingMessageId: string | null = null;
 	const active = $derived(conversations.find((conversation) => conversation.id === activeId));
 	const messages = $derived(active?.messages ?? []);
 	const searchResults = $derived(
@@ -67,6 +83,7 @@
 	const appliedTheme = $derived(theme === 'system' ? (systemDark ? 'dark' : 'light') : theme);
 
 	onMount(() => {
+		void restoreProvider();
 		isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 		const media = window.matchMedia('(prefers-color-scheme: dark)');
 		systemDark = media.matches;
@@ -80,7 +97,8 @@
 		}
 		return () => {
 			media.removeEventListener('change', update);
-			clearInterval(generationTimer);
+			providerOperation++;
+			providerAbort?.abort();
 			clearTimeout(toastTimer);
 		};
 	});
@@ -97,6 +115,76 @@
 				if (viewport) viewport.scrollTop = viewport.scrollHeight;
 			});
 	});
+
+	function beginProviderOperation() {
+		providerAbort?.abort();
+		providerAbort = new AbortController();
+		providerLoading = true;
+		providerError = '';
+		return { id: ++providerOperation, signal: providerAbort.signal };
+	}
+	function applyConnection(connection: ProviderConnection) {
+		const changedProvider =
+			provider.providerId !== connection.provider.providerId ||
+			provider.baseUrl !== connection.provider.baseUrl;
+		provider = connection.provider;
+		models = connection.models;
+		if (changedProvider || !models.some((model) => model.id === selectedModel))
+			selectedModel = models[0]?.id ?? '';
+	}
+	function handleProviderError(failure: unknown) {
+		if (failure instanceof DOMException && failure.name === 'AbortError') return;
+		providerError =
+			failure instanceof Error ? failure.message : 'Could not load provider settings.';
+		if (failure instanceof ProviderRequestError && failure.status === 401)
+			applyConnection({ provider: { ...emptyProvider }, models: [] });
+	}
+	async function restoreProvider() {
+		const operation = beginProviderOperation();
+		try {
+			const result = await getProviderStatus(operation.signal);
+			if (operation.id !== providerOperation) return;
+			provider = result.provider;
+			if (provider.connected) {
+				const connection = await getProviderModels(operation.signal);
+				if (operation.id === providerOperation) applyConnection(connection);
+			}
+		} catch (failure) {
+			if (operation.id === providerOperation) handleProviderError(failure);
+		} finally {
+			if (operation.id === providerOperation) providerLoading = false;
+		}
+	}
+	async function saveProvider(input: ConnectProviderInput) {
+		const operation = beginProviderOperation();
+		try {
+			const connection = await connectProvider(input, operation.signal);
+			if (operation.id === providerOperation) applyConnection(connection);
+		} finally {
+			if (operation.id === providerOperation) providerLoading = false;
+		}
+	}
+	async function removeProvider() {
+		const operation = beginProviderOperation();
+		try {
+			const connection = await disconnectProvider(operation.signal);
+			if (operation.id === providerOperation) applyConnection(connection);
+		} finally {
+			if (operation.id === providerOperation) providerLoading = false;
+		}
+	}
+	async function refreshModels() {
+		if (!provider.connected || providerLoading) return;
+		const operation = beginProviderOperation();
+		try {
+			const connection = await getProviderModels(operation.signal);
+			if (operation.id === providerOperation) applyConnection(connection);
+		} catch (failure) {
+			if (operation.id === providerOperation) handleProviderError(failure);
+		} finally {
+			if (operation.id === providerOperation) providerLoading = false;
+		}
+	}
 
 	function notice(text: string) {
 		toast = text;
@@ -120,20 +208,7 @@
 		if (window.matchMedia('(max-width: 767px)').matches) mobileSidebar = !mobileSidebar;
 		else desktopSidebar = !desktopSidebar;
 	}
-	function stopGeneration() {
-		clearInterval(generationTimer);
-		if (streamingConversationId && streamingMessageId) {
-			const message = conversations
-				.find((conversation) => conversation.id === streamingConversationId)
-				?.messages.find((message) => message.id === streamingMessageId);
-			if (message?.status === 'streaming') message.status = 'stopped';
-		}
-		generating = false;
-		streamingConversationId = null;
-		streamingMessageId = null;
-	}
 	function newChat() {
-		stopGeneration();
 		activeId = null;
 		draft = '';
 		mobileSidebar = false;
@@ -141,7 +216,6 @@
 		void composer?.focus();
 	}
 	function selectChat(id: string) {
-		stopGeneration();
 		activeId = id;
 		draft = '';
 		mobileSidebar = false;
@@ -156,57 +230,6 @@
 	function useSuggestion(prompt: string) {
 		draft = prompt;
 		void composer?.focus();
-	}
-	function streamReply(conversationId: string, prompt: string) {
-		const conversation = conversations.find((item) => item.id === conversationId);
-		if (!conversation) return;
-		const id = crypto.randomUUID();
-		conversation.messages.push({ id, role: 'assistant', content: '', status: 'streaming' });
-		streamingConversationId = conversationId;
-		streamingMessageId = id;
-		generating = true;
-		const message = conversation.messages.find((item) => item.id === id)!;
-		const chunks = createPreviewReply(prompt).match(/\S+\s*/g) ?? [];
-		let cursor = 0;
-		generationTimer = setInterval(() => {
-			message.content += chunks.slice(cursor, cursor + 3).join('');
-			cursor += 3;
-			if (cursor >= chunks.length) {
-				clearInterval(generationTimer);
-				message.status = 'complete';
-				generating = false;
-				streamingConversationId = null;
-				streamingMessageId = null;
-			}
-		}, 35);
-	}
-	function send() {
-		const content = draft.trim();
-		if (!content || generating) return;
-		if (!activeId) {
-			activeId = crypto.randomUUID();
-			conversations.unshift({
-				id: activeId,
-				title: content.length > 42 ? `${content.slice(0, 42)}…` : content,
-				group: 'Today',
-				icon: 'message',
-				messages: []
-			});
-		}
-		const conversation = conversations.find((item) => item.id === activeId)!;
-		conversation.messages.push({ id: crypto.randomUUID(), role: 'user', content });
-		draft = '';
-		stickToBottom = true;
-		streamReply(conversation.id, content);
-		void composer?.focus();
-	}
-	function regenerate() {
-		if (!active || generating) return;
-		const lastUser = active.messages.findLast((message) => message.role === 'user');
-		if (!lastUser) return;
-		if (active.messages.at(-1)?.role === 'assistant') active.messages.pop();
-		stickToBottom = true;
-		streamReply(active.id, lastUser.content);
 	}
 	function beginRename(id: string) {
 		renameId = id;
@@ -290,7 +313,14 @@
 					onclick={toggleSidebar}
 					aria-label="Open sidebar"
 					title="Open sidebar"><PanelLeft size={19} /></button
-				><ModelPicker bind:selected={selectedModel} />
+				><ModelPicker
+					bind:selected={selectedModel}
+					{models}
+					connected={provider.connected}
+					loading={providerLoading}
+					error={providerError}
+					onrefresh={refreshModels}
+				/>
 			</div>
 			<div class="header-actions">
 				{#if active}<button
@@ -320,11 +350,6 @@
 						{#each messages as message, index (message.id)}<ChatMessage
 								{message}
 								onnotice={notice}
-								onregenerate={index === messages.length - 1 &&
-								message.role === 'assistant' &&
-								!generating
-									? regenerate
-									: undefined}
 							/>{/each}
 					</div>
 				{:else}
@@ -356,13 +381,7 @@
 					aria-label="Scroll to latest message"><ArrowDown size={17} /></button
 				>{/if}
 			<div class="composer-dock">
-				<Composer
-					bind:this={composer}
-					bind:value={draft}
-					{generating}
-					onsend={send}
-					onstop={stopGeneration}
-				/>
+				<Composer bind:this={composer} bind:value={draft} sendDisabled />
 			</div>
 		</div>
 	</main>
@@ -383,6 +402,12 @@
 	bind:tab={settingsTab}
 	bind:systemPrompt
 	{theme}
+	{provider}
+	{models}
+	loading={providerLoading}
+	connectionError={providerError}
+	onconnect={saveProvider}
+	ondisconnect={removeProvider}
 	ontheme={setTheme}
 />
 

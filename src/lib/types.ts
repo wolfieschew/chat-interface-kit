@@ -1,3 +1,5 @@
+import type { ProviderId } from './providers.js';
+
 export type Message = {
 	id: string;
 	role: 'user' | 'assistant';
@@ -13,8 +15,21 @@ export type Conversation = {
 	messages: Message[];
 };
 
-export type PreviewModel = {
+export type ProviderModel = {
 	id: string;
 	name: string;
-	description: string;
+	ownedBy?: string;
+};
+
+export type ProviderStatus = {
+	connected: boolean;
+	providerId: ProviderId | null;
+	baseUrl: string | null;
+	remember: boolean;
+	expiresAt: number | null;
+};
+
+export type ProviderConnection = {
+	provider: ProviderStatus;
+	models: ProviderModel[];
 };
