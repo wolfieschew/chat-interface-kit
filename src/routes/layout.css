@@ -465,6 +465,26 @@ kbd {
 	max-width: 768px;
 	margin: 0 auto;
 }
+.composer-vision {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	margin: 0 0 8px;
+	padding: 8px 12px;
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	background: var(--muted);
+	color: var(--muted-foreground);
+	font-size: 11.5px;
+	line-height: 1.5;
+}
+.composer-vision.blocked {
+	border-color: color-mix(in srgb, var(--destructive) 40%, transparent);
+	color: var(--destructive);
+}
+.composer-vision svg {
+	flex-shrink: 0;
+}
 .composer {
 	display: flex;
 	align-items: flex-end;

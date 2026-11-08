@@ -27,6 +27,7 @@ export type ProviderModel = {
 	id: string;
 	name: string;
 	ownedBy?: string;
+	vision?: boolean;
 };
 
 export type ProviderStatus = {

@@ -19,7 +19,6 @@ export function modelListRequest(connection: ModelConnection, cursor?: string) {
 	} else {
 		headers.Authorization = `Bearer ${connection.apiKey}`;
 		if (providerId === 'anthropic') {
-			// https://platform.claude.com/docs/en/api/versioning
 			headers['anthropic-version'] = '2026-10-21';
 			target.searchParams.set('limit', '1000');
 			if (cursor) target.searchParams.set('after_id', cursor);
@@ -45,6 +44,24 @@ function cursorText(value: unknown): string | null {
 	if (value === undefined || value === null || value === '') return null;
 	if (!modelText(value, 2048)) invalidModels('The provider returned an invalid pagination cursor.');
 	return value;
+}
+
+function modelVision(item: Record<string, unknown>): boolean | undefined {
+	const flags: boolean[] = [];
+	if (typeof item.vision === 'boolean') flags.push(item.vision);
+	const inputs = (value: unknown): string[] | null => {
+		const container =
+			value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
+		const list = container?.input ?? container?.input_modalities;
+		return Array.isArray(list)
+			? list.map((entry) => (typeof entry === 'string' ? entry.toLowerCase() : ''))
+			: null;
+	};
+	const modalities = inputs(item.modalities);
+	if (modalities) flags.push(modalities.includes('image'));
+	const architecture = inputs(item.architecture);
+	if (architecture) flags.push(architecture.includes('image'));
+	return flags.length ? flags.some(Boolean) : undefined;
 }
 
 export function parseModelPage(body: Buffer, providerId: ProviderId = 'custom'): ModelPage {
@@ -90,7 +107,13 @@ export function parseModelPage(body: Buffer, providerId: ProviderId = 'custom'):
 					: modelText(item.owned_by, 256)
 						? item.owned_by
 						: undefined;
-		models.set(id, { id, name, ...(ownedBy ? { ownedBy } : {}) });
+		const vision = modelVision(item);
+		models.set(id, {
+			id,
+			name,
+			...(ownedBy ? { ownedBy } : {}),
+			...(vision !== undefined ? { vision } : {})
+		});
 	}
 	if (rawModels.length && !validIdentifiers)
 		invalidModels('The provider returned no valid model identifiers.');

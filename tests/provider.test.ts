@@ -192,6 +192,34 @@ describe('provider responses', () => {
 	});
 	it('allows an empty accessible model list', () =>
 		assert.deepEqual(parseModelList(Buffer.from('{"data":[]}')), []));
+	it('reads vision capability from provider model metadata', () => {
+		const body = JSON.stringify({
+			data: [
+				{ id: 'with-flag', vision: true },
+				{ id: 'no-flag', vision: false },
+				{
+					id: 'with-modalities',
+					modalities: { input: ['text', 'image'], output: ['text'] }
+				},
+				{ id: 'text-only-modalities', modalities: { input: ['text'] } },
+				{ id: 'openrouter-style', architecture: { input_modalities: ['image', 'text'] } },
+				{
+					id: 'contradicted',
+					vision: false,
+					modalities: { input: ['text', 'image'] }
+				},
+				{ id: 'unknown-capability' }
+			]
+		});
+		const byId = new Map(parseModelList(Buffer.from(body)).map((model) => [model.id, model]));
+		assert.equal(byId.get('with-flag')?.vision, true);
+		assert.equal(byId.get('no-flag')?.vision, false);
+		assert.equal(byId.get('with-modalities')?.vision, true);
+		assert.equal(byId.get('text-only-modalities')?.vision, false);
+		assert.equal(byId.get('openrouter-style')?.vision, true);
+		assert.equal(byId.get('contradicted')?.vision, true);
+		assert.equal(byId.get('unknown-capability')?.vision, undefined);
+	});
 	it('rejects malformed and incompatible model responses', () => {
 		for (const body of ['not json', '{}', '{"data":[{"id":null}]}'])
 			assert.throws(() => parseModelList(Buffer.from(body)), { code: 'invalid_models' });

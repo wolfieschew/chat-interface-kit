@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ArrowUp, Paperclip, Square, X } from '@lucide/svelte';
+	import { ArrowUp, Paperclip, Square, TriangleAlert, X } from '@lucide/svelte';
 	import { tick } from 'svelte';
 	import { MAX_IMAGES_PER_MESSAGE, readImageFile } from '#lib/images.js';
 	import type { MessageImage } from '#lib/types.js';
@@ -9,6 +9,7 @@
 		generating = false,
 		sendDisabled = false,
 		sendHint = 'Connect a provider in Settings to start chatting.',
+		visionNotice = null,
 		onsend,
 		onstop,
 		onnotice
@@ -18,6 +19,7 @@
 		generating?: boolean;
 		sendDisabled?: boolean;
 		sendHint?: string;
+		visionNotice?: { text: string; blocked: boolean } | null;
 		onsend?: () => void;
 		onstop?: () => void;
 		onnotice?: (text: string) => void;
@@ -78,6 +80,11 @@
 </script>
 
 <div class="composer-wrap">
+	{#if visionNotice}
+		<p class="composer-vision" class:blocked={visionNotice.blocked} role="status">
+			<TriangleAlert size={14} /><span>{visionNotice.text}</span>
+		</p>
+	{/if}
 	<form
 		class="composer"
 		ondragover={(event) => event.preventDefault()}

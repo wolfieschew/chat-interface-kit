@@ -43,6 +43,7 @@
 	} from '#lib/types.js';
 	import { streamChat } from '#lib/chat-client.js';
 	import { Typewriter } from '#lib/typewriter.js';
+	import { imageInputNotice } from '#lib/vision.js';
 	import type { MessageImage } from '#lib/types.js';
 	import {
 		clearConversations,
@@ -105,6 +106,13 @@
 		conversations: conversations.length,
 		messages: conversations.reduce((total, item) => total + item.messages.length, 0)
 	});
+	const visionNotice = $derived(
+		attachments.length
+			? imageInputNotice(
+					models.find((model) => model.id === selectedModel) ?? { id: selectedModel }
+				)
+			: null
+	);
 	const sendHint = $derived(
 		!provider.connected
 			? 'Connect a provider in Settings to start chatting.'
@@ -598,6 +606,7 @@
 					{sendDisabled}
 					{generating}
 					{sendHint}
+					{visionNotice}
 					onsend={() => void send()}
 					onstop={stop}
 					onnotice={notice}
