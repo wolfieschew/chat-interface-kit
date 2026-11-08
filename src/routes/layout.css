@@ -554,7 +554,8 @@ kbd {
 	margin-bottom: 34px;
 }
 .assistant-avatar {
-	margin-top: 1px;
+	justify-self: center;
+	margin-top: 3px;
 	color: var(--foreground);
 }
 .assistant-content {
@@ -713,14 +714,14 @@ kbd {
 	color: var(--subtle);
 	font-size: 10px;
 }
-.stream-cursor {
-	display: inline-block;
-	width: 6px;
-	height: 14px;
-	margin-top: 8px;
-	border-radius: 2px;
-	background: var(--foreground);
-	animation: pulse 800ms ease infinite;
+.message-error {
+	margin: 9px 0 0;
+	padding: 8px 11px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	color: var(--destructive);
+	font-size: 12px;
+	line-height: 1.55;
 }
 .scroll-bottom {
 	position: absolute;
@@ -1389,11 +1390,6 @@ kbd {
 	}
 	to {
 		transform: translateX(0);
-	}
-}
-@keyframes pulse {
-	50% {
-		opacity: 0.2;
 	}
 }
 @keyframes spin {

@@ -65,7 +65,7 @@ export async function resolvePublicAddresses(
 	}
 }
 
-function statusError(status: number, providerId: ProviderId): ProviderError {
+export function statusError(status: number, providerId: ProviderId): ProviderError {
 	if (status === 400 && providerId === 'google')
 		return new ProviderError(
 			400,
@@ -150,7 +150,6 @@ async function requestModelPage(
 	maxBytes: number,
 	providerId: ProviderId
 ): Promise<Buffer> {
-	// Bind the actual connection to the checked DNS result to prevent DNS rebinding.
 	const pinnedLookup: LookupFunction = (_hostname, options, callback) => {
 		if (options.all) callback(null, addresses);
 		else callback(null, addresses[0].address, addresses[0].family);

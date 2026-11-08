@@ -34,12 +34,16 @@
 		ProviderRequestError,
 		type ConnectProviderInput
 	} from '#lib/provider-client.js';
+	import type { ProviderId } from '#lib/providers.js';
 	import type {
 		Conversation,
+		Message,
 		ProviderConnection,
 		ProviderModel,
 		ProviderStatus
 	} from '#lib/types.js';
+	import { streamChat } from '#lib/chat-client.js';
+	import { Typewriter } from '#lib/typewriter.js';
 
 	let conversations = $state<Conversation[]>([]);
 	let activeId = $state<string | null>(null);
@@ -58,6 +62,9 @@
 	let providerAbort: AbortController | undefined;
 	let systemPrompt = $state('');
 	let draft = $state('');
+	let generating = $state(false);
+	let chatAbort: AbortController | undefined;
+	let activeTyper: Typewriter | undefined;
 	let toast = $state('');
 	let renameId = $state<string | null>(null);
 	let renameOpen = $state(false);
@@ -81,6 +88,16 @@
 		)
 	);
 	const appliedTheme = $derived(theme === 'system' ? (systemDark ? 'dark' : 'light') : theme);
+	const sendDisabled = $derived(
+		!provider.connected || !selectedModel || providerLoading || generating
+	);
+	const sendHint = $derived(
+		!provider.connected
+			? 'Connect a provider in Settings to start chatting.'
+			: !selectedModel
+				? 'Select a model to start chatting.'
+				: 'Send message'
+	);
 
 	onMount(() => {
 		void restoreProvider();
@@ -93,12 +110,14 @@
 			const saved = localStorage.getItem('chatui:theme');
 			if (saved === 'light' || saved === 'dark' || saved === 'system') theme = saved;
 		} catch {
-			/* Preferences can remain in memory when storage is unavailable. */
+			
 		}
 		return () => {
 			media.removeEventListener('change', update);
 			providerOperation++;
 			providerAbort?.abort();
+			activeTyper?.stop();
+			chatAbort?.abort();
 			clearTimeout(toastTimer);
 		};
 	});
@@ -115,6 +134,16 @@
 				if (viewport) viewport.scrollTop = viewport.scrollHeight;
 			});
 	});
+	$effect(() => {
+		const providerId = provider.providerId;
+		if (provider.connected && providerId && selectedModel) {
+			try {
+				localStorage.setItem(`chatui:model:${providerId}`, selectedModel);
+			} catch {
+				
+			}
+		}
+	});
 
 	function beginProviderOperation() {
 		providerAbort?.abort();
@@ -124,13 +153,23 @@
 		return { id: ++providerOperation, signal: providerAbort.signal };
 	}
 	function applyConnection(connection: ProviderConnection) {
+		const providerId = connection.provider.providerId;
 		const changedProvider =
-			provider.providerId !== connection.provider.providerId ||
-			provider.baseUrl !== connection.provider.baseUrl;
+			provider.providerId !== providerId || provider.baseUrl !== connection.provider.baseUrl;
 		provider = connection.provider;
 		models = connection.models;
-		if (changedProvider || !models.some((model) => model.id === selectedModel))
-			selectedModel = models[0]?.id ?? '';
+		if (changedProvider || !models.some((model) => model.id === selectedModel)) {
+			const saved = providerId ? readSavedModel(providerId) : '';
+			selectedModel = models.some((model) => model.id === saved) ? saved : (models[0]?.id ?? '');
+		}
+	}
+	function readSavedModel(providerId: ProviderId) {
+		try {
+			const saved = localStorage.getItem(`chatui:model:${providerId}`);
+			return typeof saved === 'string' ? saved : '';
+		} catch {
+			return '';
+		}
 	}
 	function handleProviderError(failure: unknown) {
 		if (failure instanceof DOMException && failure.name === 'AbortError') return;
@@ -186,6 +225,90 @@
 		}
 	}
 
+	function conversationTitle(text: string) {
+		return text.replace(/\s+/g, ' ').trim().slice(0, 60) || 'New chat';
+	}
+
+	async function send() {
+		const text = draft.trim();
+		if (!text || sendDisabled) return;
+		let conversation = active;
+		if (!conversation) {
+			const created: Conversation = {
+				id: crypto.randomUUID(),
+				title: conversationTitle(text),
+				group: 'Today',
+				icon: 'message',
+				messages: []
+			};
+			conversations = [created, ...conversations];
+			activeId = created.id;
+			conversation = conversations.find((item) => item.id === created.id) ?? created;
+		}
+		const history = conversation.messages
+			.filter((message) => message.content.trim())
+			.map(({ role, content }) => ({ role, content }));
+		const userMessage: Message = {
+			id: crypto.randomUUID(),
+			role: 'user',
+			content: text,
+			status: 'complete'
+		};
+		const assistant: Message = {
+			id: crypto.randomUUID(),
+			role: 'assistant',
+			content: '',
+			status: 'streaming'
+		};
+		conversation.messages.push(userMessage, assistant);
+		const streaming = conversation.messages[conversation.messages.length - 1];
+		draft = '';
+		stickToBottom = true;
+		generating = true;
+		chatAbort = new AbortController();
+		const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		const typer = new Typewriter((text) => (streaming.content += text), { reduced });
+		activeTyper = typer;
+		try {
+			await streamChat(
+				{
+					model: selectedModel,
+					...(systemPrompt.trim() ? { systemPrompt: systemPrompt.trim() } : {}),
+					messages: [...history, { role: 'user', content: text }]
+				},
+				{
+					signal: chatAbort.signal,
+					ondelta: (chunk) => typer.push(chunk)
+				}
+			);
+			await typer.drain();
+			streaming.status = chatAbort?.signal.aborted ? 'stopped' : 'complete';
+		} catch (failure) {
+			if (failure instanceof DOMException && failure.name === 'AbortError') {
+				typer.stop();
+				streaming.status = 'stopped';
+			} else {
+				typer.flush();
+				streaming.error =
+					failure instanceof Error ? failure.message : 'The message could not be delivered.';
+				streaming.status = 'stopped';
+				if (failure instanceof ProviderRequestError && failure.status === 401)
+					applyConnection({ provider: { ...emptyProvider }, models: [] });
+			}
+		} finally {
+			typer.stop();
+			if (activeTyper === typer) activeTyper = undefined;
+			generating = false;
+			chatAbort = undefined;
+			void composer?.focus();
+		}
+	}
+
+	function stop() {
+		activeTyper?.stop();
+		chatAbort?.abort();
+	}
+
 	function notice(text: string) {
 		toast = text;
 		clearTimeout(toastTimer);
@@ -201,7 +324,7 @@
 		try {
 			localStorage.setItem('chatui:theme', value);
 		} catch {
-			/* Use the preference for this session. */
+			
 		}
 	}
 	function toggleSidebar() {
@@ -381,7 +504,15 @@
 					aria-label="Scroll to latest message"><ArrowDown size={17} /></button
 				>{/if}
 			<div class="composer-dock">
-				<Composer bind:this={composer} bind:value={draft} sendDisabled />
+				<Composer
+					bind:this={composer}
+					bind:value={draft}
+					{sendDisabled}
+					{generating}
+					{sendHint}
+					onsend={() => void send()}
+					onstop={stop}
+				/>
 			</div>
 		</div>
 	</main>

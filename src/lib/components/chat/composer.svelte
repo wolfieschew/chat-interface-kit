@@ -5,12 +5,14 @@
 		value = $bindable(''),
 		generating = false,
 		sendDisabled = false,
+		sendHint = 'Connect a provider in Settings to start chatting.',
 		onsend,
 		onstop
 	}: {
 		value?: string;
 		generating?: boolean;
 		sendDisabled?: boolean;
+		sendHint?: string;
 		onsend?: () => void;
 		onstop?: () => void;
 	} = $props();
@@ -71,7 +73,7 @@
 				class="send-button"
 				disabled={sendDisabled || !value.trim()}
 				aria-label="Send message"
-				title={sendDisabled ? 'Chat streaming is coming next.' : 'Send message'}
+				title={sendDisabled ? sendHint : 'Send message'}
 				><ArrowUp size={19} strokeWidth={2} /></button
 			>
 		{/if}

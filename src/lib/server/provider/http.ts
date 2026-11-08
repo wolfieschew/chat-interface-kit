@@ -11,7 +11,7 @@ export function requireSameOrigin(request: Request, url: URL): void {
 	}
 }
 
-export async function readProviderInput(request: Request): Promise<unknown> {
+export async function readProviderInput(request: Request, maxBytes = 8192): Promise<unknown> {
 	if (request.headers.get('content-type')?.split(';')[0].trim() !== 'application/json')
 		throw new ProviderError(415, 'invalid_content_type', 'Send provider settings as JSON.');
 	const reader = request.body?.getReader();
@@ -23,9 +23,9 @@ export async function readProviderInput(request: Request): Promise<unknown> {
 			const { value, done } = await reader.read();
 			if (done) break;
 			bytes += value.byteLength;
-			if (bytes > 8192) {
+			if (bytes > maxBytes) {
 				await reader.cancel();
-				throw new ProviderError(413, 'request_too_large', 'The provider settings are too large.');
+				throw new ProviderError(413, 'request_too_large', 'The request payload is too large.');
 			}
 			chunks.push(value);
 		}

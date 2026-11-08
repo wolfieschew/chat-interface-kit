@@ -1,7 +1,6 @@
 <script lang="ts">
-	import { Check, Copy, RotateCcw, ThumbsDown, ThumbsUp } from '@lucide/svelte';
+	import { Check, Copy, RotateCcw, Sparkles, ThumbsDown, ThumbsUp } from '@lucide/svelte';
 	import type { Message } from '#lib/types.js';
-	import BrandMark from '#lib/components/brand-mark.svelte';
 	import Markdown from './markdown.svelte';
 	let {
 		message,
@@ -10,7 +9,20 @@
 	}: { message: Message; onregenerate?: () => void; onnotice: (text: string) => void } = $props();
 	let copied = $state(false);
 	let vote = $state<'up' | 'down' | null>(null);
+	let cursorVisible = $state(true);
 	let resetTimer: ReturnType<typeof setTimeout>;
+	const rendered = $derived(
+		message.status === 'streaming'
+			? `${message.content}${cursorVisible || !message.content ? '▍' : ''}`
+			: message.content
+	);
+	$effect(() => {
+		if (message.status !== 'streaming') return;
+		cursorVisible = true;
+		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+		const timer = setInterval(() => (cursorVisible = !cursorVisible), 530);
+		return () => clearInterval(timer);
+	});
 	async function copy() {
 		try {
 			await navigator.clipboard.writeText(message.content);
@@ -27,17 +39,18 @@
 <article
 	class:user-message={message.role === 'user'}
 	class:assistant-message={message.role === 'assistant'}
-	aria-label={message.role === 'user' ? 'Your message' : 'Example assistant response'}
+	aria-label={message.role === 'user' ? 'Your message' : 'Assistant response'}
 >
 	{#if message.role === 'user'}
 		<div class="user-bubble">{message.content}</div>
 	{:else}
-		<BrandMark size={29} class="assistant-avatar" />
+		<Sparkles size={22} strokeWidth={1.75} class="assistant-avatar" />
 		<div class="assistant-content">
-			<Markdown content={message.content} />
-			{#if message.status === 'streaming'}
-				<span class="stream-cursor" aria-label="Generating example response"></span>
-			{:else}
+			<Markdown content={rendered} />
+			{#if message.error}
+				<p class="message-error" role="alert">{message.error}</p>
+			{/if}
+			{#if message.status !== 'streaming'}
 				<div class="message-actions">
 					<button
 						class="icon-button"
@@ -65,7 +78,7 @@
 					{#if onregenerate}<button
 							class="icon-button"
 							onclick={onregenerate}
-							aria-label="Regenerate example response"
+							aria-label="Regenerate response"
 							title="Regenerate response"><RotateCcw size={15} /></button
 						>{/if}
 					{#if message.status === 'stopped'}<span class="message-stopped">Response stopped</span

@@ -5,6 +5,7 @@ export type Message = {
 	role: 'user' | 'assistant';
 	content: string;
 	status?: 'streaming' | 'complete' | 'stopped';
+	error?: string;
 };
 
 export type Conversation = {
