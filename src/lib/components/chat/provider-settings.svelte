@@ -52,6 +52,10 @@
 	let action = $state<'connect' | 'disconnect' | null>(null);
 	const busy = $derived(action !== null);
 	let error = $state('');
+	let promptDraft = $state('');
+	let promptSaved = $state(false);
+	let promptResetTimer: ReturnType<typeof setTimeout>;
+	const promptDirty = $derived(promptDraft !== systemPrompt);
 
 	$effect(() => {
 		if (open) {
@@ -59,12 +63,23 @@
 			expandedProvider = provider.connected ? activeProvider : '';
 			baseUrl = activeProvider === 'custom' ? (provider.baseUrl ?? '') : '';
 			remember = provider.connected ? provider.remember : true;
+			promptDraft = systemPrompt;
+			promptSaved = false;
 		} else {
 			apiKey = '';
 			showKey = false;
 			error = '';
 		}
 	});
+	$effect(() => () => clearTimeout(promptResetTimer));
+
+	function savePrompt() {
+		if (!promptDirty) return;
+		systemPrompt = promptDraft;
+		promptSaved = true;
+		clearTimeout(promptResetTimer);
+		promptResetTimer = setTimeout(() => (promptSaved = false), 2000);
+	}
 
 	function changeProvider() {
 		apiKey = '';
@@ -143,9 +158,15 @@
 				<textarea
 					id="system-prompt"
 					class="system-prompt-input text-input"
-					bind:value={systemPrompt}
+					bind:value={promptDraft}
 					rows="4"
 					placeholder="You are a helpful assistant."></textarea>
+				<div class="prompt-save-row">
+					{#if promptSaved}<span class="system-prompt-saved" role="status"
+							><Check size={14} />Saved</span
+						>{/if}
+					<Button disabled={!promptDirty} onclick={savePrompt}>Save prompt</Button>
+				</div>
 			</div>
 			<div class="settings-actions"><Button onclick={() => (open = false)}>Done</Button></div>
 		</Tabs.Content>

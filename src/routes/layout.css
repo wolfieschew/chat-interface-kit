@@ -1185,6 +1185,25 @@ kbd {
 	max-height: 220px;
 	line-height: 1.8;
 }
+.prompt-save-row {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 10px;
+	margin-top: 10px;
+}
+.prompt-save-row [data-slot='button'] {
+	min-height: 34px;
+	padding-inline: 13px;
+	font-size: 11px;
+}
+.system-prompt-saved {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	color: var(--muted-foreground);
+	font-size: 11px;
+}
 .appearance-options {
 	display: grid;
 	grid-template-columns: repeat(3, 1fr);

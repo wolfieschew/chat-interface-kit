@@ -1,11 +1,7 @@
 <script lang="ts">
 	import {
-		BookOpen,
-		Code2,
 		Ellipsis,
-		MessageSquare,
 		PanelLeftClose,
-		PencilLine,
 		Plus,
 		Search,
 		Settings2,
@@ -61,7 +57,7 @@
 		>
 	</div>
 	<nav class="conversation-history" aria-label="Chat history">
-		{#each ['Today', 'Previous 7 days'] as group}
+		{#each ['Today', 'Previous 7 days', 'Older'] as group}
 			{@const grouped = conversations.filter((conversation) => conversation.group === group)}
 			{#if grouped.length}
 				<div class="history-group">
@@ -73,13 +69,6 @@
 								onclick={() => onselect(conversation.id)}
 								aria-current={activeId === conversation.id ? 'page' : undefined}
 							>
-								{#if conversation.icon === 'code'}<Code2
-										size={16}
-									/>{:else if conversation.icon === 'pen'}<PencilLine
-										size={16}
-									/>{:else if conversation.icon === 'book'}<BookOpen
-										size={16}
-									/>{:else}<MessageSquare size={16} />{/if}
 								<span>{conversation.title}</span>
 							</button>
 							<DropdownMenu.Root>

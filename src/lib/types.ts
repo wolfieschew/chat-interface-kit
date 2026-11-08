@@ -11,9 +11,9 @@ export type Message = {
 export type Conversation = {
 	id: string;
 	title: string;
-	group: 'Today' | 'Previous 7 days';
-	icon: 'message' | 'code' | 'pen' | 'book';
+	group: 'Today' | 'Previous 7 days' | 'Older';
 	messages: Message[];
+	updatedAt: number;
 };
 
 export type ProviderModel = {

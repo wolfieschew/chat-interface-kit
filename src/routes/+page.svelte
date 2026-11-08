@@ -7,7 +7,6 @@
 		Check,
 		Code2,
 		Lightbulb,
-		MessageSquare,
 		PanelLeft,
 		PencilLine,
 		Search,
@@ -44,6 +43,7 @@
 	} from '#lib/types.js';
 	import { streamChat } from '#lib/chat-client.js';
 	import { Typewriter } from '#lib/typewriter.js';
+	import { deleteConversation, loadConversations, saveConversation } from '#lib/history.js';
 
 	let conversations = $state<Conversation[]>([]);
 	let activeId = $state<string | null>(null);
@@ -72,6 +72,7 @@
 	let deleteId = $state<string | null>(null);
 	let deleteOpen = $state(false);
 	let theme = $state<'light' | 'dark' | 'system'>('light');
+	let promptRestored = $state(false);
 	let systemDark = $state(false);
 	let isMac = $state(false);
 	let viewport: HTMLDivElement;
@@ -101,6 +102,7 @@
 
 	onMount(() => {
 		void restoreProvider();
+		void restoreHistory();
 		isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 		const media = window.matchMedia('(prefers-color-scheme: dark)');
 		systemDark = media.matches;
@@ -109,9 +111,10 @@
 		try {
 			const saved = localStorage.getItem('chatui:theme');
 			if (saved === 'light' || saved === 'dark' || saved === 'system') theme = saved;
-		} catch {
-			
-		}
+			const prompt = localStorage.getItem('chatui:system-prompt');
+			if (prompt) systemPrompt = prompt;
+		} catch {}
+		promptRestored = true;
 		return () => {
 			media.removeEventListener('change', update);
 			providerOperation++;
@@ -124,6 +127,13 @@
 
 	$effect(() => {
 		document.documentElement.classList.toggle('dark', appliedTheme === 'dark');
+	});
+	$effect(() => {
+		if (!promptRestored) return;
+		const prompt = systemPrompt;
+		try {
+			localStorage.setItem('chatui:system-prompt', prompt);
+		} catch {}
 	});
 	$effect(() => {
 		activeId;
@@ -139,9 +149,7 @@
 		if (provider.connected && providerId && selectedModel) {
 			try {
 				localStorage.setItem(`chatui:model:${providerId}`, selectedModel);
-			} catch {
-				
-			}
+			} catch {}
 		}
 	});
 
@@ -229,6 +237,26 @@
 		return text.replace(/\s+/g, ' ').trim().slice(0, 60) || 'New chat';
 	}
 
+	async function restoreHistory() {
+		const restored = await loadConversations();
+		if (!restored) {
+			notice('Chat history is unavailable in this browser.');
+			return;
+		}
+		if (!conversations.length) {
+			conversations = restored;
+			return;
+		}
+		const merged = new Map(restored.map((item) => [item.id, item]));
+		for (const item of conversations) merged.set(item.id, item);
+		conversations = [...merged.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+	}
+
+	function persist(conversation: Conversation) {
+		conversation.updatedAt = Date.now();
+		void saveConversation($state.snapshot(conversation));
+	}
+
 	async function send() {
 		const text = draft.trim();
 		if (!text || sendDisabled) return;
@@ -238,13 +266,18 @@
 				id: crypto.randomUUID(),
 				title: conversationTitle(text),
 				group: 'Today',
-				icon: 'message',
-				messages: []
+				messages: [],
+				updatedAt: Date.now()
 			};
 			conversations = [created, ...conversations];
 			activeId = created.id;
 			conversation = conversations.find((item) => item.id === created.id) ?? created;
+		} else {
+			const existing = conversation;
+			conversations = [existing, ...conversations.filter((item) => item.id !== existing.id)];
+			conversation = conversations.find((item) => item.id === existing.id) ?? existing;
 		}
+		persist(conversation);
 		const history = conversation.messages
 			.filter((message) => message.content.trim())
 			.map(({ role, content }) => ({ role, content }));
@@ -298,6 +331,7 @@
 		} finally {
 			typer.stop();
 			if (activeTyper === typer) activeTyper = undefined;
+			if (conversations.some((item) => item.id === conversation.id)) persist(conversation);
 			generating = false;
 			chatAbort = undefined;
 			void composer?.focus();
@@ -323,9 +357,7 @@
 		theme = value;
 		try {
 			localStorage.setItem('chatui:theme', value);
-		} catch {
-			
-		}
+		} catch {}
 	}
 	function toggleSidebar() {
 		if (window.matchMedia('(max-width: 767px)').matches) mobileSidebar = !mobileSidebar;
@@ -364,6 +396,7 @@
 		const conversation = conversations.find((item) => item.id === renameId);
 		if (conversation && renameTitle.trim()) {
 			conversation.title = renameTitle.trim();
+			persist(conversation);
 			renameOpen = false;
 			notice('Chat renamed.');
 		}
@@ -375,6 +408,7 @@
 	function deleteChat() {
 		if (activeId === deleteId) newChat();
 		conversations = conversations.filter((item) => item.id !== deleteId);
+		if (deleteId) void deleteConversation(deleteId);
 		deleteOpen = false;
 		notice('Chat deleted.');
 	}
@@ -555,7 +589,7 @@
 		{#each searchResults as conversation}<button
 				class="search-result"
 				onclick={() => selectChat(conversation.id)}
-				><MessageSquare size={18} /><span
+				><span
 					><strong>{conversation.title}</strong><small
 						>{conversation.messages.find((message) => message.role === 'user')?.content}</small
 					></span
