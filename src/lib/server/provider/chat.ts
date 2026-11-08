@@ -8,8 +8,21 @@ import { ProviderError } from './errors.ts';
 import { resolveProviderBaseUrl } from './validation.ts';
 import type { ProviderId } from '../../providers.ts';
 import { SseDecoder } from '../../sse.ts';
+import {
+	MAX_IMAGES_PER_MESSAGE,
+	MAX_IMAGE_BYTES,
+	MAX_IMAGE_TOTAL_BYTES,
+	imageByteLength,
+	isBase64Image,
+	isImageMime
+} from '../../images.ts';
 
-export type ChatMessageInput = { role: 'user' | 'assistant'; content: string };
+export type ChatImageInput = { mime: string; data: string };
+export type ChatMessageInput = {
+	role: 'user' | 'assistant';
+	content: string;
+	images?: ChatImageInput[];
+};
 export type ChatCompletionInput = {
 	model: string;
 	systemPrompt?: string;
@@ -45,20 +58,39 @@ export function chatCompletionRequest(
 		payload = {
 			contents: input.messages.map((message) => ({
 				role: message.role === 'assistant' ? 'model' : 'user',
-				parts: [{ text: message.content }]
+				parts: [
+					...(message.images ?? []).map((image) => ({
+						inlineData: { mimeType: image.mime, data: image.data }
+					})),
+					...(message.content.trim() ? [{ text: message.content }] : [])
+				]
 			})),
 			...(systemPrompt ? { systemInstruction: { parts: [{ text: systemPrompt }] } } : {})
 		};
 	} else if (providerId === 'anthropic') {
 		target = new URL(`${resolveProviderBaseUrl(providerId, connection.baseUrl)}/messages`);
 		headers.Authorization = `Bearer ${connection.apiKey}`;
-		// https://platform.claude.com/docs/en/api/versioning
 		headers['anthropic-version'] = '2026-10-21';
 		payload = {
 			model: input.model,
 			max_tokens: MAX_TOKENS,
 			stream: true,
-			messages: input.messages,
+			messages: input.messages.map((message) =>
+				message.images?.length
+					? {
+							role: message.role,
+							content: [
+								...message.images.map((image) => ({
+									type: 'image' as const,
+									source: { type: 'base64' as const, media_type: image.mime, data: image.data }
+								})),
+								...(message.content.trim()
+									? [{ type: 'text' as const, text: message.content }]
+									: [])
+							]
+						}
+					: message
+			),
 			...(systemPrompt ? { system: systemPrompt } : {})
 		};
 	} else {
@@ -69,7 +101,22 @@ export function chatCompletionRequest(
 			stream: true,
 			messages: [
 				...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-				...input.messages
+				...input.messages.map((message) =>
+					message.images?.length
+						? {
+								role: message.role,
+								content: [
+									...message.images.map((image) => ({
+										type: 'image_url' as const,
+										image_url: { url: `data:${image.mime};base64,${image.data}` }
+									})),
+									...(message.content.trim()
+										? [{ type: 'text' as const, text: message.content }]
+										: [])
+								]
+							}
+						: message
+				)
 			]
 		};
 	}
@@ -102,10 +149,11 @@ export function validateChatInput(value: unknown): ChatCompletionInput {
 				'The conversation contains an invalid message.'
 			);
 		const message = raw as Record<string, unknown>;
+		const images = validateImages(message.images, message.role);
 		if (
 			(message.role !== 'user' && message.role !== 'assistant') ||
 			typeof message.content !== 'string' ||
-			!message.content.trim() ||
+			(!message.content.trim() && !images?.length) ||
 			message.content.length > MAX_MESSAGE_CHARS
 		)
 			throw new ProviderError(
@@ -115,7 +163,8 @@ export function validateChatInput(value: unknown): ChatCompletionInput {
 			);
 		return {
 			role: message.role as 'user' | 'assistant',
-			content: message.content
+			content: message.content,
+			...(images ? { images } : {})
 		};
 	});
 	if (messages[messages.length - 1].role !== 'user')
@@ -123,8 +172,25 @@ export function validateChatInput(value: unknown): ChatCompletionInput {
 	return { model: input.model, ...(systemPrompt ? { systemPrompt } : {}), messages };
 }
 
-// Extracts the incremental text from one provider stream event. Returns an
-// empty string for events that carry no text, and throws on provider errors.
+function validateImages(value: unknown, role: unknown): ChatImageInput[] | undefined {
+	if (value === undefined || value === null) return undefined;
+	const invalid = () =>
+		new ProviderError(400, 'invalid_image', 'Attached images are not valid or too large.');
+	if (!Array.isArray(value) || value.length > MAX_IMAGES_PER_MESSAGE || role !== 'user')
+		throw invalid();
+	let totalBytes = 0;
+	const images = value.map((raw) => {
+		const image = asRecord(raw);
+		if (!image || !isImageMime(image.mime) || !isBase64Image(image.data)) throw invalid();
+		const bytes = imageByteLength(image.data);
+		if (bytes > MAX_IMAGE_BYTES) throw invalid();
+		totalBytes += bytes;
+		return { mime: image.mime as string, data: image.data as string };
+	});
+	if (totalBytes > MAX_IMAGE_TOTAL_BYTES) throw invalid();
+	return images.length ? images : undefined;
+}
+
 export function parseChatEvent(payload: string, providerId: ProviderId): string {
 	let value: unknown;
 	try {
@@ -189,9 +255,6 @@ function asText(value: unknown): string {
 	return typeof value === 'string' ? value : '';
 }
 
-// Opens the upstream chat stream, including the SSRF address check and the
-// HTTP status check, so failures before the first event still map to proper
-// HTTP errors. The returned generator then yields incremental text.
 export async function openChatStream(
 	connection: ModelConnection,
 	input: ChatCompletionInput,
@@ -228,7 +291,6 @@ async function openChatConnection(
 	cleanup: () => void;
 	timedOut: () => boolean;
 }> {
-	// Bind the actual connection to the checked DNS result to prevent DNS rebinding.
 	const pinnedLookup: LookupFunction = (_hostname, options, callback) => {
 		if (options.all) callback(null, addresses);
 		else callback(null, addresses[0].address, addresses[0].family);
@@ -303,7 +365,6 @@ async function* iterateChatResponse(
 	const decoder = new SseDecoder();
 	const textDecoder = new TextDecoder();
 	let bytes = 0;
-	// Returns undefined as the end-of-stream sentinel; '' means an event without text.
 	const read = (payload: string): string | undefined =>
 		payload === '[DONE]' ? undefined : parseChatEvent(payload, providerId);
 	try {
@@ -328,8 +389,6 @@ async function* iterateChatResponse(
 			if (text) yield text;
 		}
 	} catch (error) {
-		// A user-initiated stop ends the conversation quietly; an idle abort
-		// means the provider stalled and must surface as a timeout.
 		if (isAbortError(error)) {
 			if (timedOut())
 				throw new ProviderError(

@@ -1,9 +1,16 @@
 import type { ProviderId } from './providers.js';
 
+export type MessageImage = {
+	name: string;
+	mime: string;
+	data: string;
+};
+
 export type Message = {
 	id: string;
 	role: 'user' | 'assistant';
 	content: string;
+	images?: MessageImage[];
 	status?: 'streaming' | 'complete' | 'stopped';
 	error?: string;
 };

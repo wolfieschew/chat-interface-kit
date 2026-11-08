@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Check, Copy, RotateCcw, Sparkles, ThumbsDown, ThumbsUp } from '@lucide/svelte';
+	import { imageDataUrl } from '#lib/images.js';
 	import type { Message } from '#lib/types.js';
 	import Markdown from './markdown.svelte';
 	let {
@@ -42,7 +43,17 @@
 	aria-label={message.role === 'user' ? 'Your message' : 'Assistant response'}
 >
 	{#if message.role === 'user'}
-		<div class="user-bubble">{message.content}</div>
+		<div class="user-bubble" class:image-only={!message.content.trim()}>
+			{#if message.images?.length}
+				<div class="message-images">
+					{#each message.images as image}<img
+							src={imageDataUrl(image)}
+							alt={image.name || 'Attached image'}
+						/>{/each}
+				</div>
+			{/if}
+			{#if message.content}{message.content}{/if}
+		</div>
 	{:else}
 		<Sparkles size={22} strokeWidth={1.75} class="assistant-avatar" />
 		<div class="assistant-content">

@@ -1,13 +1,13 @@
 import { SseDecoder } from '#lib/sse.js';
 import { ProviderRequestError } from '#lib/provider-client.js';
+import type { MessageImage } from '#lib/types.js';
 
-export type ChatTurn = { role: 'user' | 'assistant'; content: string };
+export type ChatTurn = { role: 'user' | 'assistant'; content: string; images?: MessageImage[] };
 export type ChatStreamInput = {
 	model: string;
 	systemPrompt?: string;
 	messages: ChatTurn[];
 };
-
 
 export async function streamChat(
 	input: ChatStreamInput,
@@ -38,9 +38,7 @@ export async function streamChat(
 			const data = await response.json();
 			code = data.error?.code ?? code;
 			message = data.error?.message ?? message;
-		} catch {
-			
-		}
+		} catch {}
 		throw new ProviderRequestError(response.status, code, message);
 	}
 	if (!response.body)
@@ -97,9 +95,7 @@ function parseStreamEvent(payload: string): StreamEvent {
 					message: String(failure.message ?? 'The request could not be completed.')
 				}
 			};
-	} catch {
-		
-	}
+	} catch {}
 	throw new ProviderRequestError(
 		0,
 		'invalid_response',

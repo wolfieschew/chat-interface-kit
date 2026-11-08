@@ -1,6 +1,7 @@
 <script lang="ts">
 	import {
 		Check,
+		Database,
 		LoaderCircle,
 		ChevronDown,
 		Eye,
@@ -17,6 +18,7 @@
 	import type { ProviderModel, ProviderStatus } from '#lib/types.js';
 	import type { ConnectProviderInput } from '#lib/provider-client.js';
 	import { providers, type ProviderId } from '#lib/providers.js';
+	import { formatBytes, storageEstimate } from '#lib/history.js';
 
 	let {
 		open = $bindable(false),
@@ -25,11 +27,14 @@
 		theme,
 		provider,
 		models,
+		storage,
 		loading = false,
 		connectionError = '',
 		onconnect,
 		ondisconnect,
-		ontheme
+		ontheme,
+		onclearchats,
+		onreset
 	}: {
 		open?: boolean;
 		tab?: string;
@@ -37,11 +42,14 @@
 		theme: 'light' | 'dark' | 'system';
 		provider: ProviderStatus;
 		models: ProviderModel[];
+		storage: { conversations: number; messages: number };
 		loading?: boolean;
 		connectionError?: string;
 		onconnect: (input: ConnectProviderInput) => Promise<void>;
 		ondisconnect: () => Promise<void>;
 		ontheme: (value: 'light' | 'dark' | 'system') => void;
+		onclearchats: () => void;
+		onreset: () => void;
 	} = $props();
 
 	let expandedProvider = $state('');
@@ -56,6 +64,25 @@
 	let promptSaved = $state(false);
 	let promptResetTimer: ReturnType<typeof setTimeout>;
 	const promptDirty = $derived(promptDraft !== systemPrompt);
+	let usage = $state<{ usage: number | null; quota: number | null } | null>(null);
+	const usagePercent = $derived(
+		usage?.usage && usage?.quota
+			? Math.min(100, Math.round((usage.usage / usage.quota) * 1000) / 10)
+			: 0
+	);
+
+	$effect(() => {
+		if (!open) {
+			usage = null;
+			return;
+		}
+		storage.conversations;
+		let active = true;
+		void storageEstimate().then((value) => {
+			if (active) usage = value;
+		});
+		return () => (active = false);
+	});
 
 	$effect(() => {
 		if (open) {
@@ -131,6 +158,8 @@
 			>
 			<Tabs.Trigger value="provider" class="settings-tab"
 				><KeyRound size={15} />Provider</Tabs.Trigger
+			>
+			<Tabs.Trigger value="storage" class="settings-tab"><Database size={15} />Storage</Tabs.Trigger
 			>
 		</Tabs.List>
 		<Tabs.Content value="preferences" class="settings-panel">
@@ -280,6 +309,40 @@
 					</Accordion.Item>
 				{/each}
 			</Accordion.Root>
+		</Tabs.Content>
+		<Tabs.Content value="storage" class="settings-panel">
+			<div class="form-field">
+				<span class="field-label">Data & storage</span>
+				<p class="storage-summary">
+					{storage.conversations}
+					{storage.conversations === 1 ? 'conversation' : 'conversations'} ·
+					{storage.messages}
+					{storage.messages === 1 ? 'message' : 'messages'} saved in this browser
+				</p>
+				{#if usage}
+					<div class="storage-meter" aria-hidden="true">
+						<span style={`width:${usagePercent}%`}></span>
+					</div>
+					<p class="storage-detail">
+						{formatBytes(usage.usage ?? 0)}{usage.quota
+							? ` of ${formatBytes(usage.quota)} available`
+							: ''} for this site, including cached assets.
+					</p>
+				{:else}
+					<p class="storage-detail">Usage figures are unavailable in this browser.</p>
+				{/if}
+				<div class="storage-actions">
+					<Button variant="outline" disabled={!storage.conversations} onclick={onclearchats}
+						>Delete all chats</Button
+					>
+					<Button variant="outline" onclick={onreset}>Reset local data</Button>
+				</div>
+				<p class="storage-note">
+					Reset removes chats, the system prompt, model choices, and appearance from this browser.
+					Your provider connection stays active.
+				</p>
+			</div>
+			<div class="settings-actions"><Button onclick={() => (open = false)}>Done</Button></div>
 		</Tabs.Content>
 	</Tabs.Root>
 </Modal>

@@ -43,7 +43,13 @@
 	} from '#lib/types.js';
 	import { streamChat } from '#lib/chat-client.js';
 	import { Typewriter } from '#lib/typewriter.js';
-	import { deleteConversation, loadConversations, saveConversation } from '#lib/history.js';
+	import type { MessageImage } from '#lib/types.js';
+	import {
+		clearConversations,
+		deleteConversation,
+		loadConversations,
+		saveConversation
+	} from '#lib/history.js';
 
 	let conversations = $state<Conversation[]>([]);
 	let activeId = $state<string | null>(null);
@@ -62,6 +68,7 @@
 	let providerAbort: AbortController | undefined;
 	let systemPrompt = $state('');
 	let draft = $state('');
+	let attachments = $state<MessageImage[]>([]);
 	let generating = $state(false);
 	let chatAbort: AbortController | undefined;
 	let activeTyper: Typewriter | undefined;
@@ -71,6 +78,8 @@
 	let renameTitle = $state('');
 	let deleteId = $state<string | null>(null);
 	let deleteOpen = $state(false);
+	let clearOpen = $state(false);
+	let resetOpen = $state(false);
 	let theme = $state<'light' | 'dark' | 'system'>('light');
 	let promptRestored = $state(false);
 	let systemDark = $state(false);
@@ -92,6 +101,10 @@
 	const sendDisabled = $derived(
 		!provider.connected || !selectedModel || providerLoading || generating
 	);
+	const storageSummary = $derived({
+		conversations: conversations.length,
+		messages: conversations.reduce((total, item) => total + item.messages.length, 0)
+	});
 	const sendHint = $derived(
 		!provider.connected
 			? 'Connect a provider in Settings to start chatting.'
@@ -259,12 +272,13 @@
 
 	async function send() {
 		const text = draft.trim();
-		if (!text || sendDisabled) return;
+		const images = attachments;
+		if ((!text && !images.length) || sendDisabled) return;
 		let conversation = active;
 		if (!conversation) {
 			const created: Conversation = {
 				id: crypto.randomUUID(),
-				title: conversationTitle(text),
+				title: conversationTitle(text || 'Image message'),
 				group: 'Today',
 				messages: [],
 				updatedAt: Date.now()
@@ -279,12 +293,17 @@
 		}
 		persist(conversation);
 		const history = conversation.messages
-			.filter((message) => message.content.trim())
-			.map(({ role, content }) => ({ role, content }));
+			.filter((message) => message.content.trim() || message.images?.length)
+			.map(({ role, content, images: messageImages }) => ({
+				role,
+				content,
+				...(messageImages?.length ? { images: messageImages } : {})
+			}));
 		const userMessage: Message = {
 			id: crypto.randomUUID(),
 			role: 'user',
 			content: text,
+			...(images.length ? { images } : {}),
 			status: 'complete'
 		};
 		const assistant: Message = {
@@ -296,6 +315,7 @@
 		conversation.messages.push(userMessage, assistant);
 		const streaming = conversation.messages[conversation.messages.length - 1];
 		draft = '';
+		attachments = [];
 		stickToBottom = true;
 		generating = true;
 		chatAbort = new AbortController();
@@ -307,7 +327,10 @@
 				{
 					model: selectedModel,
 					...(systemPrompt.trim() ? { systemPrompt: systemPrompt.trim() } : {}),
-					messages: [...history, { role: 'user', content: text }]
+					messages: [
+						...history,
+						{ role: 'user', content: text, ...(images.length ? { images } : {}) }
+					]
 				},
 				{
 					signal: chatAbort.signal,
@@ -366,6 +389,7 @@
 	function newChat() {
 		activeId = null;
 		draft = '';
+		attachments = [];
 		mobileSidebar = false;
 		stickToBottom = true;
 		void composer?.focus();
@@ -373,6 +397,7 @@
 	function selectChat(id: string) {
 		activeId = id;
 		draft = '';
+		attachments = [];
 		mobileSidebar = false;
 		searchOpen = false;
 		stickToBottom = true;
@@ -411,6 +436,34 @@
 		if (deleteId) void deleteConversation(deleteId);
 		deleteOpen = false;
 		notice('Chat deleted.');
+	}
+
+	function askClearChats() {
+		settingsOpen = false;
+		clearOpen = true;
+	}
+	function askReset() {
+		settingsOpen = false;
+		resetOpen = true;
+	}
+	async function clearChats() {
+		conversations = [];
+		activeId = null;
+		draft = '';
+		attachments = [];
+		searchOpen = false;
+		await clearConversations();
+		clearOpen = false;
+		notice('All chats deleted.');
+	}
+	async function resetLocalData() {
+		resetOpen = false;
+		await clearConversations();
+		try {
+			for (const key of Object.keys(localStorage))
+				if (key.startsWith('chatui:')) localStorage.removeItem(key);
+		} catch {}
+		location.reload();
 	}
 	function exportChat() {
 		if (!active) return;
@@ -541,11 +594,13 @@
 				<Composer
 					bind:this={composer}
 					bind:value={draft}
+					bind:attachments
 					{sendDisabled}
 					{generating}
 					{sendHint}
 					onsend={() => void send()}
 					onstop={stop}
+					onnotice={notice}
 				/>
 			</div>
 		</div>
@@ -569,11 +624,14 @@
 	{theme}
 	{provider}
 	{models}
+	storage={storageSummary}
 	loading={providerLoading}
 	connectionError={providerError}
 	onconnect={saveProvider}
 	ondisconnect={removeProvider}
 	ontheme={setTheme}
+	onclearchats={askClearChats}
+	onreset={askReset}
 />
 
 <Modal bind:open={searchOpen} title="Search chats" class="search-modal">
@@ -591,7 +649,8 @@
 				onclick={() => selectChat(conversation.id)}
 				><span
 					><strong>{conversation.title}</strong><small
-						>{conversation.messages.find((message) => message.role === 'user')?.content}</small
+						>{conversation.messages.find((message) => message.role === 'user')?.content ||
+							'Image attachment'}</small
 					></span
 				><ArrowUpRight size={14} /></button
 			>{/each}
@@ -624,6 +683,31 @@
 	<div class="modal-actions">
 		<Button variant="outline" onclick={() => (deleteOpen = false)}>Keep chat</Button><Button
 			onclick={deleteChat}><Trash2 size={14} />Delete chat</Button
+		>
+	</div></Modal
+>
+<Modal bind:open={clearOpen} title="Delete all chats?" class="small-modal"
+	><p class="delete-chat-title">
+		{storageSummary.conversations}
+		{storageSummary.conversations === 1 ? 'conversation' : 'conversations'} and
+		{storageSummary.messages}
+		{storageSummary.messages === 1 ? 'message' : 'messages'} will be removed from this browser. Settings
+		and the provider connection stay.
+	</p>
+	<div class="modal-actions">
+		<Button variant="outline" onclick={() => (clearOpen = false)}>Keep chats</Button><Button
+			onclick={clearChats}><Trash2 size={14} />Delete all chats</Button
+		>
+	</div></Modal
+>
+<Modal bind:open={resetOpen} title="Reset local data?" class="small-modal"
+	><p class="delete-chat-title">
+		Every chat, the system prompt, saved model choices, and the appearance setting will be cleared
+		from this browser. The provider connection stays active.
+	</p>
+	<div class="modal-actions">
+		<Button variant="outline" onclick={() => (resetOpen = false)}>Keep data</Button><Button
+			onclick={resetLocalData}><Trash2 size={14} />Reset and reload</Button
 		>
 	</div></Modal
 >

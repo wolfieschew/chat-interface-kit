@@ -122,6 +122,101 @@ describe('chat input validation', () => {
 	});
 });
 
+describe('chat requests with images', () => {
+	const image = { mime: 'image/png', data: 'iVBORw0KGgo=' };
+	it('sends OpenAI image parts ahead of the text', () => {
+		const { body } = chatCompletionRequest(
+			{ providerId: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: 'key' },
+			{ model: 'gpt-x', messages: [{ role: 'user', content: 'What is this?', images: [image] }] }
+		);
+		const payload = JSON.parse(body);
+		assert.deepEqual(payload.messages[0].content, [
+			{ type: 'image_url', image_url: { url: `data:image/png;base64,${image.data}` } },
+			{ type: 'text', text: 'What is this?' }
+		]);
+	});
+	it('sends Anthropic image blocks ahead of the text', () => {
+		const { body } = chatCompletionRequest(
+			{ providerId: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', apiKey: 'key' },
+			{ model: 'claude-x', messages: [{ role: 'user', content: 'What is this?', images: [image] }] }
+		);
+		const payload = JSON.parse(body);
+		assert.deepEqual(payload.messages[0].content, [
+			{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: image.data } },
+			{ type: 'text', text: 'What is this?' }
+		]);
+	});
+	it('sends Google inline data parts ahead of the text', () => {
+		const { body } = chatCompletionRequest(
+			{
+				providerId: 'google',
+				baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+				apiKey: 'key'
+			},
+			{ model: 'gemini-x', messages: [{ role: 'user', content: 'What is this?', images: [image] }] }
+		);
+		const payload = JSON.parse(body);
+		assert.deepEqual(payload.contents[0].parts, [
+			{ inlineData: { mimeType: 'image/png', data: image.data } },
+			{ text: 'What is this?' }
+		]);
+	});
+	it('sends image-only messages without an empty text part', () => {
+		const { body } = chatCompletionRequest(
+			{ providerId: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: 'key' },
+			{ model: 'gpt-x', messages: [{ role: 'user', content: '', images: [image] }] }
+		);
+		const payload = JSON.parse(body);
+		assert.deepEqual(payload.messages[0].content, [
+			{ type: 'image_url', image_url: { url: `data:image/png;base64,${image.data}` } }
+		]);
+	});
+});
+
+describe('chat input validation with images', () => {
+	const image = { mime: 'image/png', data: 'iVBORw0KGgo=' };
+	it('accepts image-only user messages and strips extra fields', () => {
+		const validated = validateChatInput({
+			model: 'gpt-x',
+			messages: [{ role: 'user', content: '', images: [{ ...image, name: 'shot.png' }] }]
+		});
+		assert.deepEqual(validated.messages, [{ role: 'user', content: '', images: [image] }]);
+	});
+	it('rejects invalid, oversized, or misplaced images', () => {
+		const tooBig = { mime: 'image/png', data: 'A'.repeat(2 * 1024 * 1024 * 2) };
+		const cases = [
+			{ images: [{ mime: 'text/html', data: 'aGk=' }] },
+			{ images: [{ mime: 'image/png', data: 'not base64!' }] },
+			{ images: [{ mime: 'image/png', data: 'aGk' }] },
+			{ images: [tooBig] },
+			{ images: Array.from({ length: 5 }, () => image) },
+			{
+				images: Array.from({ length: 4 }, () => tooBig)
+			}
+		];
+		for (const images of cases)
+			assert.throws(
+				() =>
+					validateChatInput({ model: 'gpt-x', messages: [{ role: 'user', content: 'x', images }] }),
+				{ code: 'invalid_image' }
+			);
+		assert.throws(
+			() =>
+				validateChatInput({
+					model: 'gpt-x',
+					messages: [{ role: 'assistant', content: 'x', images: [image] }]
+				}),
+			{ code: 'invalid_image' }
+		);
+	});
+	it('still rejects text-only messages without content', () => {
+		assert.throws(
+			() => validateChatInput({ model: 'gpt-x', messages: [{ role: 'user', content: '   ' }] }),
+			{ code: 'invalid_request' }
+		);
+	});
+});
+
 describe('chat stream events', () => {
 	it('extracts OpenAI-compatible deltas and ignores usage-only chunks', () => {
 		assert.equal(parseChatEvent('{"choices":[{"delta":{"content":"Hel"}}]}', 'openai'), 'Hel');

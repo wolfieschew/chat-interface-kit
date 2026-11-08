@@ -1,4 +1,11 @@
-import type { Conversation, Message } from './types.ts';
+import type { Conversation, Message, MessageImage } from './types.ts';
+import {
+	MAX_IMAGES_PER_MESSAGE,
+	MAX_IMAGE_BYTES,
+	imageByteLength,
+	isBase64Image,
+	isImageMime
+} from './images.ts';
 
 const DB_NAME = 'chatui';
 const DB_VERSION = 1;
@@ -33,7 +40,6 @@ function open(): Promise<IDBDatabase | null> {
 		request.onblocked = () => resolve(null);
 	});
 }
-
 
 export async function loadConversations(): Promise<Conversation[] | null> {
 	const db = await open();
@@ -93,6 +99,50 @@ export async function deleteConversation(id: string): Promise<boolean> {
 	}
 }
 
+export async function clearConversations(): Promise<boolean> {
+	const db = await open();
+	if (!db) return false;
+	try {
+		await new Promise<void>((resolve, reject) => {
+			const tx = db.transaction(STORE, 'readwrite');
+			tx.objectStore(STORE).clear();
+			tx.oncomplete = () => resolve();
+			tx.onerror = () => reject(tx.error);
+			tx.onabort = () => reject(tx.error);
+		});
+		return true;
+	} catch {
+		return false;
+	} finally {
+		db.close();
+	}
+}
+
+export async function storageEstimate(): Promise<{
+	usage: number | null;
+	quota: number | null;
+} | null> {
+	if (typeof navigator === 'undefined' || !navigator.storage?.estimate) return null;
+	try {
+		const { usage, quota } = await navigator.storage.estimate();
+		return { usage: usage ?? null, quota: quota ?? null };
+	} catch {
+		return null;
+	}
+}
+
+export function formatBytes(bytes: number): string {
+	if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
+	const units = ['B', 'KB', 'MB', 'GB'];
+	let value = bytes;
+	let unit = 0;
+	while (value >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit++;
+	}
+	const rounded = unit === 0 || value >= 10 ? Math.round(value) : value.toFixed(1);
+	return `${rounded} ${units[unit]}`;
+}
 
 export function sanitizeConversation(value: unknown): Conversation | null {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -110,13 +160,16 @@ export function sanitizeConversation(value: unknown): Conversation | null {
 				id: typeof raw.id === 'string' ? raw.id : '',
 				role: raw.role === 'assistant' ? 'assistant' : 'user',
 				content: typeof raw.content === 'string' ? raw.content : '',
-				// An interrupted stream must not restore as still generating.
 				status: raw.status === 'stopped' || raw.status === 'streaming' ? 'stopped' : 'complete'
 			};
 			if (typeof raw.error === 'string' && raw.error) message.error = raw.error;
+			const images = sanitizeImages(raw.images);
+			if (images.length) message.images = images;
 			return message;
 		})
-		.filter((message) => message.id && (message.content || message.error));
+		.filter(
+			(message) => message.id && (message.content || message.error || message.images?.length)
+		);
 	return {
 		id,
 		title: typeof record.title === 'string' ? record.title : '',
@@ -124,4 +177,25 @@ export function sanitizeConversation(value: unknown): Conversation | null {
 		messages,
 		updatedAt
 	};
+}
+
+function sanitizeImages(value: unknown): MessageImage[] {
+	if (!Array.isArray(value)) return [];
+	const images: MessageImage[] = [];
+	for (const raw of value) {
+		if (images.length >= MAX_IMAGES_PER_MESSAGE) break;
+		const image = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
+		if (
+			image &&
+			isImageMime(image.mime) &&
+			isBase64Image(image.data) &&
+			imageByteLength(image.data) <= MAX_IMAGE_BYTES
+		)
+			images.push({
+				name: typeof image.name === 'string' && image.name ? image.name : 'image',
+				mime: image.mime as string,
+				data: image.data as string
+			});
+	}
+	return images;
 }

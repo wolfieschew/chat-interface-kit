@@ -4,7 +4,7 @@ import { ProviderError, providerFailure } from '#lib/server/provider/errors.ts';
 import { privateHeaders, readProviderInput, requireSameOrigin } from '#lib/server/provider/http.ts';
 import { assertSessionConfigured, requireProviderSession } from '#lib/server/provider/session.ts';
 
-const MAX_CHAT_INPUT_BYTES = 256 * 1024;
+const MAX_CHAT_INPUT_BYTES = 5 * 1024 * 1024;
 const encoder = new TextEncoder();
 
 function aborted(error: unknown): boolean {
@@ -47,21 +47,15 @@ export const POST: RequestHandler = async ({ cookies, request, url }) => {
 					}
 					try {
 						send(JSON.stringify({ error: { code: failure.code, message: failure.message } }));
-					} catch {
-
-					}
+					} catch {}
 				} finally {
 					try {
 						send('[DONE]');
 						controller.close();
-					} catch {
-						
-					}
+					} catch {}
 				}
 			},
-			cancel() {
-				
-			}
+			cancel() {}
 		});
 		return new Response(stream, {
 			headers: {

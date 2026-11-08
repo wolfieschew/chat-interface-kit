@@ -1,11 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+	clearConversations,
 	conversationGroup,
 	deleteConversation,
+	formatBytes,
 	loadConversations,
 	sanitizeConversation,
-	saveConversation
+	saveConversation,
+	storageEstimate
 } from '../src/lib/history.ts';
 
 const DAY = 86_400_000;
@@ -89,6 +92,53 @@ describe('stored conversation sanitizing', () => {
 		);
 		assert.equal(conversation.messages[1].error, 'Key rejected');
 	});
+	it('restores image-only messages and drops damaged attachments', () => {
+		const image = { name: 'shot.png', mime: 'image/png', data: 'aGVsbG8=' };
+		const conversation = sanitizeConversation({
+			id: 'chat-4',
+			title: 'Image message',
+			updatedAt: Date.now(),
+			messages: [
+				{
+					id: 'm1',
+					role: 'user',
+					content: '',
+					status: 'complete',
+					images: [
+						image,
+						{ mime: 'text/html', data: 'aGk=' },
+						{ mime: 'image/png', data: 'not base64' },
+						{ mime: 'image/jpeg', data: 'A'.repeat(2 * 1024 * 1024 * 2) },
+						{ mime: 'image/webp', data: 'aGVsbG8h' }
+					]
+				}
+			]
+		});
+		assert.ok(conversation);
+		assert.equal(conversation.messages.length, 1);
+		assert.deepEqual(conversation.messages[0].images, [
+			image,
+			{ name: 'image', mime: 'image/webp', data: 'aGVsbG8h' }
+		]);
+	});
+	it('caps restored attachments at the per-message limit', () => {
+		const image = { name: 'a.png', mime: 'image/png', data: 'aGVsbG8=' };
+		const conversation = sanitizeConversation({
+			id: 'chat-5',
+			title: 'Many',
+			updatedAt: Date.now(),
+			messages: [
+				{
+					id: 'm1',
+					role: 'user',
+					content: '',
+					images: Array.from({ length: 6 }, () => image)
+				}
+			]
+		});
+		assert.ok(conversation);
+		assert.equal(conversation.messages[0].images?.length, 4);
+	});
 });
 
 describe('storage fallback without IndexedDB', () => {
@@ -105,5 +155,21 @@ describe('storage fallback without IndexedDB', () => {
 			false
 		);
 		assert.equal(await deleteConversation('chat-1'), false);
+		assert.equal(await clearConversations(), false);
+		assert.equal(await storageEstimate(), null);
+	});
+});
+
+describe('byte formatting', () => {
+	it('formats sizes for humans', () => {
+		assert.equal(formatBytes(0), '0 B');
+		assert.equal(formatBytes(512), '512 B');
+		assert.equal(formatBytes(1024), '1.0 KB');
+		assert.equal(formatBytes(1536), '1.5 KB');
+		assert.equal(formatBytes(20 * 1024), '20 KB');
+		assert.equal(formatBytes(4.2 * 1024 * 1024), '4.2 MB');
+		assert.equal(formatBytes(3 * 1024 * 1024 * 1024), '3.0 GB');
+		assert.equal(formatBytes(-5), '0 B');
+		assert.equal(formatBytes(Number.NaN), '0 B');
 	});
 });
