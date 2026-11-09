@@ -9,6 +9,7 @@ Aplikasi chat BYOK (bring your own key) minimalis yang dibangun dengan Svelte 5,
 - **Bring Your Own Key (BYOK)**: OpenAI, Google Gemini, Anthropic, atau endpoint apa pun yang kompatibel dengan OpenAI sebagai Custom Provider.
 - **Chat streaming** dengan efek ketik yang menghormati `prefers-reduced-motion`, tombol Stop, dan penanganan error yang tampil langsung di dalam pesan.
 - **Lampiran gambar**: dari file picker, drag and drop, atau paste. Gambar di atas 900 KB otomatis diperkecil menjadi WebP di sisi klien. Peringatan muncul ketika model yang dipilih tidak bisa membaca gambar, berdasarkan data kapabilitas yang dilaporkan provider (atau fallback berbasis nama model).
+- **Lampiran dokumen**: PDF, Word (`.doc`, `.docx`), dan spreadsheet (`.xlsx`, `.xls`, `.ods`, `.csv`, `.tsv`). Isi teks dibaca sementara di server, lalu disertakan sebagai konteks chat dan disimpan di riwayat lokal. Maksimal 4 lampiran campuran per pesan dan 4 MB per dokumen. PDF hasil scan memerlukan OCR; gambar dan format visual di dalam dokumen belum dianalisis.
 - **Riwayat percakapan lokal** di IndexedDB dengan pencarian, ubah judul, hapus, dan ekspor JSON. Percakapan dikelompokkan berdasarkan waktu dan dipulihkan setelah refresh.
 - **System prompt** dengan pengeditan draft-then-save, tersimpan per browser.
 - **Keamanan sesi**: API key tidak pernah kembali ke browser setelah connect. Key dienkripsi dengan AES-256-GCM dan disimpan di cookie HttpOnly yang hanya bisa dibaca server.
@@ -110,7 +111,6 @@ Buka `http://localhost:5173`, masuk ke Settings, dan hubungkan provider dengan A
 | `npm test`      | Menjalankan suite `node:test`          |
 | `npm run check` | Diagnostik svelte-check dan TypeScript |
 | `npm run lint`  | Pemeriksaan format Prettier            |
-
 
 ## Model keamanan
 

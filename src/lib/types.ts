@@ -6,11 +6,19 @@ export type MessageImage = {
 	data: string;
 };
 
+export type MessageDocument = {
+	name: string;
+	mime: string;
+	size: number;
+	text: string;
+};
+
 export type Message = {
 	id: string;
 	role: 'user' | 'assistant';
 	content: string;
 	images?: MessageImage[];
+	documents?: MessageDocument[];
 	status?: 'streaming' | 'complete' | 'stopped';
 	error?: string;
 };

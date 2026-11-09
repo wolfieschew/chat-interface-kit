@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import https, { type RequestOptions } from 'node:https';
+import dns from 'node:dns/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import type { ClientRequest, IncomingMessage } from 'node:http';
 import {
 	chatCompletionRequest,
@@ -13,7 +15,10 @@ import {
 } from '../src/lib/server/provider/chat.ts';
 import { SseDecoder } from '../src/lib/sse.ts';
 
-afterEach(() => mock.restoreAll());
+afterEach(() => {
+	mock.restoreAll();
+	syncBuiltinESMExports();
+});
 
 const messages = [{ role: 'user' as const, content: 'Hello' }];
 const input: ChatCompletionInput = { model: 'gpt-x', messages };
@@ -285,6 +290,8 @@ describe('SSE decoding', () => {
 });
 
 function mockStream(status: number, chunks: string[], delay = 0) {
+	mock.method(dns, 'lookup', async () => [{ address: '8.8.8.8', family: 4 }]);
+	syncBuiltinESMExports();
 	let captured: { url?: URL; options?: RequestOptions; body?: string } = {};
 	let upstream: PassThrough | undefined;
 	mock.method(
@@ -368,6 +375,7 @@ describe('chat streaming transport', () => {
 			AbortSignal.timeout(5000)
 		);
 		assert.deepEqual(await collect(events), ['Bon', 'jour']);
+		assert.equal(handle.captured().url?.hostname, 'generativelanguage.googleapis.com');
 		assert.equal(handle.captured().url?.pathname, '/v1beta/models/gpt-x:streamGenerateContent');
 		assert.equal(handle.captured().url?.searchParams.get('alt'), 'sse');
 	});

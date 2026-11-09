@@ -1,6 +1,8 @@
 <script lang="ts">
-	import { Check, Copy, RotateCcw, Sparkles, ThumbsDown, ThumbsUp } from '@lucide/svelte';
+	import { Check, Copy, FileText, RotateCcw, Sparkles, ThumbsDown, ThumbsUp } from '@lucide/svelte';
 	import { imageDataUrl } from '#lib/images.js';
+	import { documentExtension } from '#lib/documents.js';
+	import { formatBytes } from '#lib/history.js';
 	import type { Message } from '#lib/types.js';
 	import Markdown from './markdown.svelte';
 	let {
@@ -44,6 +46,22 @@
 >
 	{#if message.role === 'user'}
 		<div class="user-bubble" class:image-only={!message.content.trim()}>
+			{#if message.documents?.length}
+				<div class="message-documents">
+					{#each message.documents as document}
+						<div class="document-chip" title={document.name}>
+							<FileText size={21} strokeWidth={1.5} />
+							<span class="document-info"
+								><strong>{document.name}</strong><small
+									>{documentExtension(document.name).toUpperCase()} · {formatBytes(
+										document.size
+									)}</small
+								></span
+							>
+						</div>
+					{/each}
+				</div>
+			{/if}
 			{#if message.images?.length}
 				<div class="message-images">
 					{#each message.images as image}<img

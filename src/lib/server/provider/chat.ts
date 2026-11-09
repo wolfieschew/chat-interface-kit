@@ -9,6 +9,13 @@ import { resolveProviderBaseUrl } from './validation.ts';
 import type { ProviderId } from '../../providers.ts';
 import { SseDecoder } from '../../sse.ts';
 import {
+	documentContext,
+	isMessageDocument,
+	MAX_ATTACHMENTS_PER_MESSAGE,
+	MAX_DOCUMENT_TOTAL_CHARS
+} from '../../documents.ts';
+import type { MessageDocument } from '../../types.ts';
+import {
 	MAX_IMAGES_PER_MESSAGE,
 	MAX_IMAGE_BYTES,
 	MAX_IMAGE_TOTAL_BYTES,
@@ -22,6 +29,7 @@ export type ChatMessageInput = {
 	role: 'user' | 'assistant';
 	content: string;
 	images?: ChatImageInput[];
+	documents?: MessageDocument[];
 };
 export type ChatCompletionInput = {
 	model: string;
@@ -50,13 +58,18 @@ export function chatCompletionRequest(
 		'Accept-Encoding': 'identity'
 	};
 	const systemPrompt = input.systemPrompt?.trim() || undefined;
+	const messages = input.messages.map(({ role, content, images, documents }) => ({
+		role,
+		content: documentContext(content, documents),
+		...(images?.length ? { images } : {})
+	}));
 	if (providerId === 'google') {
 		target = new URL(
 			`${resolveProviderBaseUrl(providerId, connection.baseUrl)}/models/${input.model}:streamGenerateContent?alt=sse`
 		);
 		headers['x-goog-api-key'] = connection.apiKey;
 		payload = {
-			contents: input.messages.map((message) => ({
+			contents: messages.map((message) => ({
 				role: message.role === 'assistant' ? 'model' : 'user',
 				parts: [
 					...(message.images ?? []).map((image) => ({
@@ -75,7 +88,7 @@ export function chatCompletionRequest(
 			model: input.model,
 			max_tokens: MAX_TOKENS,
 			stream: true,
-			messages: input.messages.map((message) =>
+			messages: messages.map((message) =>
 				message.images?.length
 					? {
 							role: message.role,
@@ -101,7 +114,7 @@ export function chatCompletionRequest(
 			stream: true,
 			messages: [
 				...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-				...input.messages.map((message) =>
+				...messages.map((message) =>
 					message.images?.length
 						? {
 								role: message.role,
@@ -150,10 +163,13 @@ export function validateChatInput(value: unknown): ChatCompletionInput {
 			);
 		const message = raw as Record<string, unknown>;
 		const images = validateImages(message.images, message.role);
+		const documents = validateDocuments(message.documents, message.role);
+		if ((images?.length ?? 0) + (documents?.length ?? 0) > MAX_ATTACHMENTS_PER_MESSAGE)
+			throw new ProviderError(400, 'invalid_document', 'Attach at most 4 files per message.');
 		if (
 			(message.role !== 'user' && message.role !== 'assistant') ||
 			typeof message.content !== 'string' ||
-			(!message.content.trim() && !images?.length) ||
+			(!message.content.trim() && !images?.length && !documents?.length) ||
 			message.content.length > MAX_MESSAGE_CHARS
 		)
 			throw new ProviderError(
@@ -164,12 +180,30 @@ export function validateChatInput(value: unknown): ChatCompletionInput {
 		return {
 			role: message.role as 'user' | 'assistant',
 			content: message.content,
-			...(images ? { images } : {})
+			...(images ? { images } : {}),
+			...(documents ? { documents } : {})
 		};
 	});
 	if (messages[messages.length - 1].role !== 'user')
 		throw new ProviderError(400, 'invalid_request', 'The conversation must end with your message.');
 	return { model: input.model, ...(systemPrompt ? { systemPrompt } : {}), messages };
+}
+
+function validateDocuments(value: unknown, role: unknown): MessageDocument[] | undefined {
+	if (value === undefined || value === null) return undefined;
+	const invalid = () =>
+		new ProviderError(400, 'invalid_document', 'Attached documents are not valid or too large.');
+	if (!Array.isArray(value) || value.length > MAX_ATTACHMENTS_PER_MESSAGE || role !== 'user')
+		throw invalid();
+	let chars = 0;
+	const documents = value.map((document) => {
+		if (!isMessageDocument(document)) throw invalid();
+		chars += document.text.length;
+		const { name, mime, size, text } = document;
+		return { name, mime, size, text };
+	});
+	if (chars > MAX_DOCUMENT_TOTAL_CHARS) throw invalid();
+	return documents.length ? documents : undefined;
 }
 
 function validateImages(value: unknown, role: unknown): ChatImageInput[] | undefined {

@@ -44,7 +44,8 @@
 	import { streamChat } from '#lib/chat-client.js';
 	import { Typewriter } from '#lib/typewriter.js';
 	import { imageInputNotice } from '#lib/vision.js';
-	import type { MessageImage } from '#lib/types.js';
+	import type { MessageDocument, MessageImage } from '#lib/types.js';
+	import { documentContext } from '#lib/documents.js';
 	import {
 		clearConversations,
 		deleteConversation,
@@ -70,6 +71,7 @@
 	let systemPrompt = $state('');
 	let draft = $state('');
 	let attachments = $state<MessageImage[]>([]);
+	let documents = $state<MessageDocument[]>([]);
 	let generating = $state(false);
 	let chatAbort: AbortController | undefined;
 	let activeTyper: Typewriter | undefined;
@@ -93,7 +95,7 @@
 	const messages = $derived(active?.messages ?? []);
 	const searchResults = $derived(
 		conversations.filter((conversation) =>
-			`${conversation.title} ${conversation.messages.map((message) => message.content).join(' ')}`
+			`${conversation.title} ${conversation.messages.map((message) => documentContext(message.content, message.documents)).join(' ')}`
 				.toLowerCase()
 				.includes(searchQuery.toLowerCase().trim())
 		)
@@ -281,12 +283,13 @@
 	async function send() {
 		const text = draft.trim();
 		const images = attachments;
-		if ((!text && !images.length) || sendDisabled) return;
+		const files = documents;
+		if ((!text && !images.length && !files.length) || sendDisabled) return;
 		let conversation = active;
 		if (!conversation) {
 			const created: Conversation = {
 				id: crypto.randomUUID(),
-				title: conversationTitle(text || 'Image message'),
+				title: conversationTitle(text || files[0]?.name || 'Image message'),
 				group: 'Today',
 				messages: [],
 				updatedAt: Date.now()
@@ -301,17 +304,21 @@
 		}
 		persist(conversation);
 		const history = conversation.messages
-			.filter((message) => message.content.trim() || message.images?.length)
-			.map(({ role, content, images: messageImages }) => ({
+			.filter(
+				(message) => message.content.trim() || message.images?.length || message.documents?.length
+			)
+			.map(({ role, content, images: messageImages, documents: messageDocuments }) => ({
 				role,
 				content,
-				...(messageImages?.length ? { images: messageImages } : {})
+				...(messageImages?.length ? { images: messageImages } : {}),
+				...(messageDocuments?.length ? { documents: messageDocuments } : {})
 			}));
 		const userMessage: Message = {
 			id: crypto.randomUUID(),
 			role: 'user',
 			content: text,
 			...(images.length ? { images } : {}),
+			...(files.length ? { documents: files } : {}),
 			status: 'complete'
 		};
 		const assistant: Message = {
@@ -324,6 +331,7 @@
 		const streaming = conversation.messages[conversation.messages.length - 1];
 		draft = '';
 		attachments = [];
+		documents = [];
 		stickToBottom = true;
 		generating = true;
 		chatAbort = new AbortController();
@@ -337,7 +345,12 @@
 					...(systemPrompt.trim() ? { systemPrompt: systemPrompt.trim() } : {}),
 					messages: [
 						...history,
-						{ role: 'user', content: text, ...(images.length ? { images } : {}) }
+						{
+							role: 'user',
+							content: text,
+							...(images.length ? { images } : {}),
+							...(files.length ? { documents: files } : {})
+						}
 					]
 				},
 				{
@@ -395,17 +408,21 @@
 		else desktopSidebar = !desktopSidebar;
 	}
 	function newChat() {
+		composer?.cancelReading();
 		activeId = null;
 		draft = '';
 		attachments = [];
+		documents = [];
 		mobileSidebar = false;
 		stickToBottom = true;
 		void composer?.focus();
 	}
 	function selectChat(id: string) {
+		composer?.cancelReading();
 		activeId = id;
 		draft = '';
 		attachments = [];
+		documents = [];
 		mobileSidebar = false;
 		searchOpen = false;
 		stickToBottom = true;
@@ -455,10 +472,12 @@
 		resetOpen = true;
 	}
 	async function clearChats() {
+		composer?.cancelReading();
 		conversations = [];
 		activeId = null;
 		draft = '';
 		attachments = [];
+		documents = [];
 		searchOpen = false;
 		await clearConversations();
 		clearOpen = false;
@@ -475,7 +494,7 @@
 	}
 	function exportChat() {
 		if (!active) return;
-		const content = `# ${active.title}\n\n${active.messages.map((message) => `## ${message.role === 'user' ? 'You' : 'ChatUI'}\n\n${message.content}`).join('\n\n')}`;
+		const content = `# ${active.title}\n\n${active.messages.map((message) => `## ${message.role === 'user' ? 'You' : 'ChatUI'}\n\n${documentContext(message.content, message.documents)}`).join('\n\n')}`;
 		const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown;charset=utf-8' }));
 		const link = document.createElement('a');
 		link.href = url;
@@ -603,6 +622,7 @@
 					bind:this={composer}
 					bind:value={draft}
 					bind:attachments
+					bind:documents
 					{sendDisabled}
 					{generating}
 					{sendHint}
@@ -659,6 +679,8 @@
 				><span
 					><strong>{conversation.title}</strong><small
 						>{conversation.messages.find((message) => message.role === 'user')?.content ||
+							conversation.messages.find((message) => message.documents?.length)?.documents?.[0]
+								?.name ||
 							'Image attachment'}</small
 					></span
 				><ArrowUpRight size={14} /></button

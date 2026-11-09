@@ -1,8 +1,13 @@
 import { SseDecoder } from '#lib/sse.js';
 import { ProviderRequestError } from '#lib/provider-client.js';
-import type { MessageImage } from '#lib/types.js';
+import type { MessageDocument, MessageImage } from '#lib/types.js';
 
-export type ChatTurn = { role: 'user' | 'assistant'; content: string; images?: MessageImage[] };
+export type ChatTurn = {
+	role: 'user' | 'assistant';
+	content: string;
+	images?: MessageImage[];
+	documents?: MessageDocument[];
+};
 export type ChatStreamInput = {
 	model: string;
 	systemPrompt?: string;
@@ -13,6 +18,13 @@ export async function streamChat(
 	input: ChatStreamInput,
 	handlers: { signal: AbortSignal; ondelta: (text: string) => void }
 ): Promise<void> {
+	const body = JSON.stringify(input);
+	if (new TextEncoder().encode(body).byteLength > 4_400_000)
+		throw new ProviderRequestError(
+			413,
+			'request_too_large',
+			'This conversation has too many attachments. Start a new chat or use smaller files.'
+		);
 	let response: Response;
 	try {
 		response = await fetch('/api/chat', {
@@ -20,7 +32,7 @@ export async function streamChat(
 			credentials: 'same-origin',
 			cache: 'no-store',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(input),
+			body,
 			signal: handlers.signal
 		});
 	} catch (error) {

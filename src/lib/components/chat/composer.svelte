@@ -1,11 +1,29 @@
 <script lang="ts">
-	import { ArrowUp, Paperclip, Square, TriangleAlert, X } from '@lucide/svelte';
-	import { tick } from 'svelte';
-	import { MAX_IMAGES_PER_MESSAGE, readImageFile } from '#lib/images.js';
-	import type { MessageImage } from '#lib/types.js';
+	import {
+		ArrowUp,
+		FileText,
+		LoaderCircle,
+		Paperclip,
+		Square,
+		TriangleAlert,
+		X
+	} from '@lucide/svelte';
+	import { onDestroy, tick } from 'svelte';
+	import { readImageFile } from '#lib/images.js';
+	import {
+		ATTACHMENT_ACCEPT,
+		documentExtension,
+		documentMime,
+		MAX_ATTACHMENTS_PER_MESSAGE,
+		MAX_DOCUMENT_TOTAL_CHARS,
+		readDocumentFile
+	} from '#lib/documents.js';
+	import { formatBytes } from '#lib/history.js';
+	import type { MessageDocument, MessageImage } from '#lib/types.js';
 	let {
 		value = $bindable(''),
 		attachments = $bindable<MessageImage[]>([]),
+		documents = $bindable<MessageDocument[]>([]),
 		generating = false,
 		sendDisabled = false,
 		sendHint = 'Connect a provider in Settings to start chatting.',
@@ -16,6 +34,7 @@
 	}: {
 		value?: string;
 		attachments?: MessageImage[];
+		documents?: MessageDocument[];
 		generating?: boolean;
 		sendDisabled?: boolean;
 		sendHint?: string;
@@ -26,7 +45,18 @@
 	} = $props();
 	let input: HTMLTextAreaElement;
 	let fileInput: HTMLInputElement;
-	const canSend = $derived(!!value.trim() || attachments.length > 0);
+	let reading = $state(false);
+	let readController: AbortController | undefined;
+	const canSend = $derived(
+		!reading && (!!value.trim() || attachments.length > 0 || documents.length > 0)
+	);
+	const fileCount = $derived(attachments.length + documents.length);
+	export function cancelReading() {
+		readController?.abort();
+		readController = undefined;
+		reading = false;
+	}
+	onDestroy(cancelReading);
 	function resize() {
 		if (!input) return;
 		input.style.height = 'auto';
@@ -42,35 +72,59 @@
 		resize();
 	});
 	async function addFiles(files: File[]) {
-		const added: MessageImage[] = [...attachments];
-		for (const file of files) {
-			try {
-				added.push(await readImageFile(file, added));
-			} catch (error) {
-				onnotice?.(error instanceof Error ? error.message : 'The image could not be attached.');
+		if (reading || generating || !files.length) return;
+		const controller = new AbortController();
+		readController = controller;
+		reading = true;
+		try {
+			for (const file of files) {
+				if (controller.signal.aborted) return;
+				if (attachments.length + documents.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+					onnotice?.('Attach at most 4 files per message.');
+					break;
+				}
+				try {
+					if (documentMime(file.name)) {
+						const document = await readDocumentFile(file, controller.signal);
+						if (controller.signal.aborted) return;
+						if (
+							documents.reduce((total, item) => total + item.text.length, document.text.length) >
+							MAX_DOCUMENT_TOTAL_CHARS
+						)
+							throw new Error('Attached documents contain too much text. Use smaller sections.');
+						documents = [...documents, document];
+					} else {
+						const image = await readImageFile(file, attachments);
+						if (controller.signal.aborted) return;
+						attachments = [...attachments, image];
+					}
+				} catch (error) {
+					if (controller.signal.aborted) return;
+					onnotice?.(
+						`${file.name}: ${error instanceof Error ? error.message : 'The file could not be attached.'}`
+					);
+				}
+			}
+		} finally {
+			if (readController === controller) {
+				reading = false;
+				readController = undefined;
 			}
 		}
-		if (added.length > MAX_IMAGES_PER_MESSAGE) {
-			added.length = MAX_IMAGES_PER_MESSAGE;
-			onnotice?.('At most 4 images can be attached per message.');
-		}
-		attachments = added;
 	}
 	function remove(index: number) {
 		attachments = attachments.filter((_, position) => position !== index);
 	}
 	function ondrop(event: DragEvent) {
-		const files = [...(event.dataTransfer?.files ?? [])].filter((file) =>
-			file.type.startsWith('image/')
-		);
+		const files = [...(event.dataTransfer?.files ?? [])];
 		if (files.length) {
 			event.preventDefault();
 			void addFiles(files);
 		}
 	}
 	function onpaste(event: ClipboardEvent) {
-		const files = [...(event.clipboardData?.files ?? [])].filter((file) =>
-			file.type.startsWith('image/')
+		const files = [...(event.clipboardData?.files ?? [])].filter(
+			(file) => file.type.startsWith('image/') || documentMime(file.name)
 		);
 		if (files.length) {
 			event.preventDefault();
@@ -96,7 +150,7 @@
 	>
 		<input
 			type="file"
-			accept="image/png,image/jpeg,image/webp,image/gif"
+			accept={ATTACHMENT_ACCEPT}
 			multiple
 			bind:this={fileInput}
 			class="sr-only"
@@ -110,13 +164,13 @@
 		<button
 			type="button"
 			class="attach-button"
-			disabled={generating || attachments.length >= MAX_IMAGES_PER_MESSAGE}
+			disabled={generating || reading || fileCount >= MAX_ATTACHMENTS_PER_MESSAGE}
 			onclick={() => fileInput.click()}
-			aria-label="Attach image"
-			title="Attach image"><Paperclip size={17} /></button
+			aria-label="Attach files"
+			title="Attach images, PDF, Word, or spreadsheets"><Paperclip size={17} /></button
 		>
 		<div class="composer-body">
-			{#if attachments.length}
+			{#if fileCount || reading}
 				<div class="composer-attachments">
 					{#each attachments as attachment, index}
 						<div class="attachment-chip">
@@ -127,12 +181,36 @@
 							<button
 								type="button"
 								class="attachment-remove"
+								disabled={reading || generating}
 								onclick={() => remove(index)}
 								aria-label="Remove {attachment.name}"
 								title="Remove image"><X size={12} /></button
 							>
 						</div>
 					{/each}
+					{#each documents as document, index}
+						<div class="attachment-chip document-chip" title={document.name}>
+							<FileText size={21} strokeWidth={1.5} />
+							<span class="document-info"
+								><strong>{document.name}</strong><small
+									>{documentExtension(document.name).toUpperCase()} · {formatBytes(
+										document.size
+									)}</small
+								></span
+							>
+							<button
+								type="button"
+								class="attachment-remove"
+								disabled={reading || generating}
+								onclick={() => (documents = documents.filter((_, position) => position !== index))}
+								aria-label="Remove {document.name}"
+								title="Remove file"><X size={12} /></button
+							>
+						</div>
+					{/each}
+					{#if reading}<span class="attachment-reading" role="status"
+							><LoaderCircle size={15} />Reading files…</span
+						>{/if}
 				</div>
 			{/if}
 			<textarea

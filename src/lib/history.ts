@@ -1,5 +1,10 @@
 import type { Conversation, Message, MessageImage } from './types.ts';
 import {
+	isMessageDocument,
+	MAX_ATTACHMENTS_PER_MESSAGE,
+	MAX_DOCUMENT_TOTAL_CHARS
+} from './documents.ts';
+import {
 	MAX_IMAGES_PER_MESSAGE,
 	MAX_IMAGE_BYTES,
 	imageByteLength,
@@ -165,10 +170,21 @@ export function sanitizeConversation(value: unknown): Conversation | null {
 			if (typeof raw.error === 'string' && raw.error) message.error = raw.error;
 			const images = sanitizeImages(raw.images);
 			if (images.length) message.images = images;
+			let chars = 0;
+			if (message.role === 'user' && Array.isArray(raw.documents)) {
+				const documents = raw.documents
+					.filter(isMessageDocument)
+					.slice(0, MAX_ATTACHMENTS_PER_MESSAGE - images.length)
+					.filter((document) => (chars += document.text.length) <= MAX_DOCUMENT_TOTAL_CHARS)
+					.map(({ name, mime, size, text }) => ({ name, mime, size, text }));
+				if (documents.length) message.documents = documents;
+			}
 			return message;
 		})
 		.filter(
-			(message) => message.id && (message.content || message.error || message.images?.length)
+			(message) =>
+				message.id &&
+				(message.content || message.error || message.images?.length || message.documents?.length)
 		);
 	return {
 		id,

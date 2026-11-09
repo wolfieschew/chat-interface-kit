@@ -14,6 +14,15 @@ export function requireSameOrigin(request: Request, url: URL): void {
 export async function readProviderInput(request: Request, maxBytes = 8192): Promise<unknown> {
 	if (request.headers.get('content-type')?.split(';')[0].trim() !== 'application/json')
 		throw new ProviderError(415, 'invalid_content_type', 'Send provider settings as JSON.');
+	const bytes = await readRequestBytes(request, maxBytes);
+	try {
+		return JSON.parse(bytes.toString('utf8'));
+	} catch {
+		throw new ProviderError(400, 'invalid_request', 'The provider settings could not be read.');
+	}
+}
+
+export async function readRequestBytes(request: Request, maxBytes: number): Promise<Buffer> {
 	const reader = request.body?.getReader();
 	if (!reader) throw new ProviderError(400, 'invalid_request', 'Enter your provider settings.');
 	let bytes = 0;
@@ -29,11 +38,7 @@ export async function readProviderInput(request: Request, maxBytes = 8192): Prom
 			}
 			chunks.push(value);
 		}
-		try {
-			return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-		} catch {
-			throw new ProviderError(400, 'invalid_request', 'The provider settings could not be read.');
-		}
+		return Buffer.concat(chunks);
 	} finally {
 		reader.releaseLock();
 	}

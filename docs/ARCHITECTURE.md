@@ -100,12 +100,21 @@ Conversation {
 Message {
   id, role: 'user' | 'assistant', content,
   images?: { name, mime, data }[],   ← base64 tanpa prefix data:
+  documents?: { name, mime, size, text }[],   ← teks hasil ekstraksi, tanpa berkas asli
   status?: 'streaming' | 'complete' | 'stopped',
   error?: string
 }
 ```
 
 Batas lampiran: 2 MB per gambar, 3 MB total per pesan, maksimal 4 gambar. Angka ini dipilih agar body request tetap di bawah limit serverless Vercel (~4.5 MB) setelah ekspansi base64 ~33%. Gambar di atas 900 KB di-downscale ke sisi terpanjang 1600 px dan di-encode WebP kualitas 0.82; GIF dilewati agar animasinya utuh.
+
+### Lampiran dokumen
+
+`POST /api/attachments` menerima satu berkas biner dengan nama pada header `X-File-Name` dan guard same-origin. Body dibaca bertahap dengan batas 4 MB. `server/documents.ts` mengekstrak teks PDF menggunakan `pdf-parse`, Word `.doc/.docx` menggunakan `word-extractor`, dan spreadsheet `.xlsx/.xls/.ods/.csv/.tsv` menggunakan SheetJS. Berkas diproses di memori dan tidak disimpan di server. Parser tidak membuka URL atau path dari input pengguna.
+
+PDF dibatasi 100 halaman; spreadsheet maksimal 20 sheet, 2.000 baris dan 100 kolom per sheet. Arsip Office diperiksa sebelum ekstraksi (maksimal 1.000 entry dan 32 MB ukuran terurai). Dokumen kosong, rusak, terenkripsi, atau melebihi batas ditolak dengan pesan yang dapat ditampilkan. PDF scan belum menjalani OCR, dan ekstraksi hanya mencakup teks serta nilai sel.
+
+Metadata dan teks hasil ekstraksi dikembalikan ke composer sebagai `MessageDocument`, ditampilkan sebagai kartu file, lalu disimpan bersama pesan di IndexedDB. Maksimal 4 lampiran campuran per pesan, 48.000 karakter per dokumen, dan 96.000 karakter dokumen per pesan. Pergantian percakapan membatalkan pembacaan yang berjalan. Saat membentuk request provider, `documentContext()` menyertakan nama dan teks dokumen pada konten pesan pengguna untuk seluruh provider. Pesan lanjutan menyertakan kembali konteks dokumen dari riwayat. Klien menolak payload chat di atas 4.400.000 byte sebelum request dikirim.
 
 `sanitizeConversation` di `history.ts` adalah gerbang tunggal data yang masuk dari IndexedDB: record tanpa id/pesan dibuang, field rusak jatuh ke nilai aman, pesan `streaming` yang terputus dipulihkan sebagai `stopped`, dan lampiran tipe tidak dikenal dibuang. Tambahkan field baru pada `Message` berarti menambahkan sanitasinya juga.
 
